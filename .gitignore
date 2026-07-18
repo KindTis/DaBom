@@ -1,0 +1,21 @@
+### Windows
+# Windows thumbnail cache files
+Thumbs.db
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows shortcuts
+*.lnk
+.codex
+AGENTS.md
+
+# .NET build outputs
+**/bin/
+**/obj/
+docs
+graphify-out
+reference-design
