@@ -1,0 +1,120 @@
+<Window x:Class="Dabom.MetadataWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="메타데이터 편집" Width="920" Height="760"
+        MinWidth="760" MinHeight="620"
+        WindowStartupLocation="CenterOwner" Closing="OnClosing">
+    <Grid Margin="28" IsEnabled="{Binding IsNotSaving}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <Border Width="240" Height="360" Background="{StaticResource SurfaceBrush}"
+                    CornerRadius="16" ClipToBounds="True">
+                <Grid>
+                    <Image x:Name="PosterPreview" Source="{Binding PreviewPoster}"
+                           Stretch="UniformToFill" />
+                    <TextBlock Text="NO POSTER" HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedBrush}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasPreviewPoster}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </Border>
+            <Button Content="포스터 선택·교체" Click="OnChoosePoster"
+                    Margin="0,16,0,0" />
+            <Button Content="포스터 제거" Click="OnRemovePoster"
+                    Margin="0,8,0,0" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Column="1" Margin="28,0,0,0"
+                      VerticalScrollBarVisibility="Auto">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="파일 경로" Margin="0,9,12,9" />
+                <TextBox Grid.Column="1" Text="{Binding Path, Mode=OneWay}"
+                         IsReadOnly="True" Margin="0,3" Padding="9,7" />
+
+                <TextBlock Grid.Row="1" Text="제목" Margin="0,9,12,9" />
+                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,3" Padding="9,7"
+                         Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Row="2" Text="원제" Margin="0,9,12,9" />
+                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,3" Padding="9,7"
+                         Text="{Binding OriginalTitle, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Row="3" Text="개봉일" Margin="0,9,12,9" />
+                <DatePicker Grid.Row="3" Grid.Column="1" Margin="0,3"
+                            SelectedDate="{Binding ReleaseDate, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Row="4" Text="감독" Margin="0,9,12,9" />
+                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,3" Padding="9,7"
+                         Text="{Binding Director, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Row="5" Text="배우" Margin="0,9,12,9" />
+                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="9,7"
+                         Text="{Binding ActorsText, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="쉼표로 구분" />
+
+                <TextBlock Grid.Row="6" Text="줄거리" Margin="0,9,12,9" />
+                <TextBox Grid.Row="6" Grid.Column="1" Height="150" Margin="0,3"
+                         Padding="9,7" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         Text="{Binding Synopsis, UpdateSourceTrigger=PropertyChanged}" />
+
+                <TextBlock Grid.Row="7" Text="파일 크기" Margin="0,12,12,6" />
+                <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding FileSizeText}"
+                           Margin="0,12,0,6" Foreground="{StaticResource MutedBrush}" />
+
+                <TextBlock Grid.Row="8" Text="수정일" Margin="0,6,12" />
+                <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding ModifiedText}"
+                           Margin="0,6" Foreground="{StaticResource MutedBrush}" />
+
+                <TextBlock Grid.Row="9" Text="재생시간" Margin="0,6,12" />
+                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding DurationText}"
+                           Margin="0,6" Foreground="{StaticResource MutedBrush}" />
+
+                <TextBlock Grid.Row="10" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
+                           Foreground="#FFE28B8B" TextWrapping="Wrap" Margin="0,16,0,0" />
+            </Grid>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,24,0,0">
+            <Button Content="취소" IsCancel="True" Margin="0,0,8,0" />
+            <Button Content="저장" IsDefault="True" Click="OnSave" />
+        </StackPanel>
+    </Grid>
+</Window>

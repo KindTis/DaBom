@@ -1,4 +1,5 @@
 using Dabom.Main;
+using Dabom.Metadata;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -16,6 +17,28 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.OldValue is MainViewModel oldViewModel)
+        {
+            oldViewModel.MetadataEditRequested -= OnMetadataEditRequested;
+        }
+        if (e.NewValue is MainViewModel newViewModel)
+        {
+            newViewModel.MetadataEditRequested += OnMetadataEditRequested;
+        }
+    }
+
+    private void OnMetadataEditRequested(object? sender, MetadataEditorViewModel editor)
+    {
+        new MetadataWindow
+        {
+            Owner = this,
+            DataContext = editor
+        }.ShowDialog();
     }
 
     private void OnToggleLocations(object sender, RoutedEventArgs e)

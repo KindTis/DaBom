@@ -106,6 +106,33 @@ public sealed class MetadataEditorViewModelTests
         Assert.IsTrue(editor.HasPreviewPoster);
     }
 
+    [TestMethod]
+    public async Task ChoosePoster_WhenImageIsInvalid_KeepsCurrentPreview()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-editor-invalid-poster-");
+        try
+        {
+            var invalidPath = Path.Combine(root.FullName, "invalid.png");
+            await File.WriteAllTextAsync(invalidPath, "not an image");
+            var preview = BitmapSource.Create(
+                1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[4], 4);
+            preview.Freeze();
+            var editor = new MetadataEditorViewModel(
+                @"D:\Movie.mkv", new VideoRecord(), preview,
+                (_, _) => Task.FromResult<string?>(null));
+
+            editor.ChoosePoster(invalidPath);
+
+            Assert.AreSame(preview, editor.PreviewPoster);
+            Assert.IsNull(editor.SelectedPosterSourcePath);
+            StringAssert.Contains(editor.ErrorMessage, "JPG");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     private static void WritePng(string path)
     {
         var bitmap = BitmapSource.Create(
