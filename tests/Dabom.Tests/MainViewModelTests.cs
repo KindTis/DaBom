@@ -557,6 +557,49 @@ public sealed class MainViewModelTests
         }
     }
 
+    [TestMethod]
+    public async Task InitializeAsync_WithoutLocations_ShowsEmptyStateWithoutScanning()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-initialize-empty-");
+        try
+        {
+            var scanner = new StubScanner();
+            var vm = CreateViewModel(new LibraryStore(root.FullName), scanner, new LibraryData());
+
+            await vm.InitializeAsync(null);
+
+            Assert.AreEqual(0, scanner.Calls);
+            Assert.AreEqual(
+                "보관 위치를 추가해 동영상 라이브러리를 시작하세요.", vm.StatusMessage);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_WithLocation_ScansOnce()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-initialize-scan-");
+        try
+        {
+            var scanner = new StubScanner();
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName), scanner,
+                new LibraryData { Locations = [root.FullName] });
+
+            await vm.InitializeAsync("시작 경고");
+
+            Assert.AreEqual(1, scanner.Calls);
+            Assert.AreEqual("폴더 확인을 마쳤습니다.", vm.StatusMessage);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     private static MainViewModel CreateViewModel(
         LibraryStore store,
         ILibraryScanner scanner,

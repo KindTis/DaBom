@@ -1,12 +1,388 @@
-﻿<Window x:Class="Dabom.MainWindow"
+<Window x:Class="Dabom.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:Dabom"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
+        xmlns:main="clr-namespace:Dabom.Main"
+        xmlns:library="clr-namespace:Dabom.Library"
+        Title="DABOM" Width="1440" Height="1000" MinWidth="760" MinHeight="640"
+        PreviewKeyDown="OnPreviewKeyDown" Loaded="OnLoaded">
     <Grid>
+        <Canvas x:Name="DustCanvas" IsHitTestVisible="False" />
 
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <Grid MaxWidth="1720" Margin="32,18,32,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Height="62">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="DABOM" FontSize="20" FontWeight="Bold" />
+                        <Border Width="42" Height="1" Margin="18,1,0,0"
+                                Background="{StaticResource AccentBrush}" />
+                        <TextBlock Text="내가 고른 영상들을 위한 작은 상영관"
+                                   Margin="15,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}" />
+                    </StackPanel>
+                    <Button Content="보관 위치 설정" HorizontalAlignment="Right"
+                            VerticalAlignment="Center" Click="OnToggleLocations" />
+                </Grid>
+
+                <Border Grid.Row="1" Margin="0,28,0,0" Padding="34" CornerRadius="28"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                        Background="#FF171819">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding FeaturedVideo}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Grid DataContext="{Binding FeaturedVideo}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="210" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="210" Height="315" CornerRadius="16"
+                                ClipToBounds="True" Background="{StaticResource SurfaceBrush}">
+                            <Grid>
+                                <Image Source="{Binding Poster}" Stretch="UniformToFill" />
+                                <TextBlock Text="NO POSTER" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource MutedBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasPoster}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="50,0,0,0"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="다음에 볼 영상" Foreground="{StaticResource AccentBrush}"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding OriginalTitle}"
+                                       Foreground="{StaticResource MutedBrush}" Margin="0,10,0,0" />
+                            <TextBlock Text="{Binding DisplayTitle}" FontSize="58"
+                                       FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,14,0,0">
+                                <Run Text="{Binding ReleaseYear}" />
+                                <Run Text=" · " />
+                                <Run Text="{Binding Director}" />
+                                <Run Text=" · " />
+                                <Run Text="{Binding DurationText}" />
+                            </TextBlock>
+                            <TextBlock Text="{Binding Record.Synopsis}"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap" MaxWidth="650" Margin="0,18,0,0"
+                                       HorizontalAlignment="Left" />
+                            <Button Content="재생하기"
+                                    Command="{Binding DataContext.PlayFeaturedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    Margin="0,26,0,0" HorizontalAlignment="Left" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1" Margin="0,28,0,0" MinHeight="380" Padding="50"
+                        CornerRadius="28" BorderBrush="{StaticResource LineBrush}"
+                        BorderThickness="1" Background="#FF171819">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Locations.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                                MaxWidth="560">
+                        <TextBlock Text="당신의 영상을 한곳에서" FontSize="42"
+                                   FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock Text="보관 위치를 추가하면 DABOM이 영상을 찾아 정리합니다. 원본 파일은 변경하지 않습니다."
+                                   Margin="0,18,0,0" TextWrapping="Wrap" TextAlignment="Center"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="16" />
+                        <Button Content="보관 위치 추가" Click="OnAddLocation"
+                                IsEnabled="{Binding CanMutateLibrary}"
+                                HorizontalAlignment="Center" Margin="0,28,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Margin="0,28,0,0" MinHeight="380" Padding="50"
+                        CornerRadius="28" BorderBrush="{StaticResource LineBrush}"
+                        BorderThickness="1" Background="#FF171819">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding FeaturedVideo}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Locations.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="지원하는 영상이 없습니다" FontSize="34"
+                                   FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock Text="MP4, MKV, AVI, MOV, WMV, M4V 파일을 확인합니다."
+                                   Margin="0,14,0,0" Foreground="{StaticResource MutedBrush}" />
+                        <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}"
+                                HorizontalAlignment="Center" Margin="0,24,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <Grid Grid.Row="2" Margin="0,24,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center">
+                        <Run Text="내 영상 " />
+                        <Run Text="{Binding VisibleCount}" FontSize="22" />
+                        <Run Text="편" />
+                    </TextBlock>
+                    <TextBox x:Name="SearchBox" Grid.Column="1" Margin="22,0"
+                             Height="54" Padding="18,0" VerticalContentAlignment="Center"
+                             ToolTip="제목, 감독, 배우 검색 (Ctrl+K)"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                    <ComboBox Grid.Column="2" Width="150" Height="54"
+                              SelectedValue="{Binding SelectedSort}"
+                              SelectedValuePath="Tag">
+                        <ComboBoxItem Content="제목" Tag="{x:Static library:VideoSort.Title}" />
+                        <ComboBoxItem Content="개봉일" Tag="{x:Static library:VideoSort.ReleaseDate}" />
+                        <ComboBoxItem Content="파일 수정일" Tag="{x:Static library:VideoSort.FileModified}" />
+                    </ComboBox>
+                </Grid>
+
+                <ListBox x:Name="VideoList" Grid.Row="3" Margin="0,30,0,0"
+                         BorderThickness="0" Background="Transparent"
+                         ItemsSource="{Binding VisibleVideos}"
+                         SelectedItem="{Binding SelectedVideo}"
+                         KeyDown="OnVideoListKeyDown"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.Style>
+                        <Style TargetType="ListBox">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding VisibleCount}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.Style>
+                    <ListBox.Template>
+                        <ControlTemplate TargetType="{x:Type ListBox}">
+                            <ItemsPresenter />
+                        </ControlTemplate>
+                    </ListBox.Template>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Margin" Value="0,0,22,42" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border Background="{TemplateBinding Background}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter
+                                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                        </Border>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                            <EventSetter Event="MouseDoubleClick" Handler="OnVideoDoubleClick" />
+                            <EventSetter Event="MouseEnter" Handler="OnCardEnter" />
+                            <EventSetter Event="MouseLeave" Handler="OnCardLeave" />
+                            <EventSetter Event="GotKeyboardFocus" Handler="OnCardFocus" />
+                            <EventSetter Event="LostKeyboardFocus" Handler="OnCardBlur" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <!-- ponytail: 화면용 포스터는 240px로 제한한다. 그래도 1,000개 실측이 실패할 때만 가상화 패널로 교체한다. -->
+                            <WrapPanel IsItemsHost="True" />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type main:VideoItemViewModel}">
+                            <StackPanel Width="175">
+                                <Border Width="175" Height="262.5" CornerRadius="16"
+                                        ClipToBounds="True" Background="{StaticResource SurfaceBrush}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                             Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                             Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TextBrush}" />
+                                                    <Setter Property="BorderThickness" Value="3" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Image Source="{Binding Poster}" Stretch="UniformToFill" />
+                                        <TextBlock Text="NO POSTER" HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource MutedBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasPoster}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                                <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" Margin="5,15,5,0" />
+                                <TextBlock Foreground="{StaticResource MutedBrush}" Margin="5,7,5,0">
+                                    <Run Text="{Binding ReleaseYear}" />
+                                    <Run Text=" · " />
+                                    <Run Text="{Binding Director}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <Grid Grid.Row="4" MinHeight="92">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,20,0">
+                        <TextBlock Text="{Binding LastScanText}" />
+                        <TextBlock Text="폴더 확인 중…" Foreground="{StaticResource MutedBrush}"
+                                   Margin="0,5,0,0"
+                                   Visibility="{Binding IsScanning, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding StatusMessage}"
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsScanning}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button Content="{Binding Warnings.Count, StringFormat=경고 {0}건}"
+                                Click="OnToggleWarnings" Margin="0,0,10,0">
+                            <Button.Style>
+                                <Style TargetType="Button"
+                                       BasedOn="{StaticResource {x:Type Button}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Warnings.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </ScrollViewer>
+
+        <Popup x:Name="LocationsPopup" Placement="MousePoint" StaysOpen="False"
+               AllowsTransparency="True">
+            <Border Width="370" Padding="20" CornerRadius="18"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                    Background="#FF151617">
+                <StackPanel>
+                    <TextBlock Text="보관 위치 설정" FontSize="18" FontWeight="SemiBold" />
+                    <ItemsControl ItemsSource="{Binding Locations}" Margin="0,12,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,5">
+                                    <Button DockPanel.Dock="Right" Content="제거" Tag="{Binding}"
+                                            Click="OnRemoveLocation"
+                                            IsEnabled="{Binding DataContext.CanMutateLibrary, RelativeSource={RelativeSource AncestorType=ItemsControl}}" />
+                                    <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center" Margin="0,0,12,0" />
+                                </DockPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button Content="보관 위치 추가" Click="OnAddLocation" Margin="0,16,0,0"
+                            IsEnabled="{Binding CanMutateLibrary}" />
+                    <TextBlock Text="탐색 중에는 위치를 변경할 수 없습니다."
+                               Margin="0,10,0,0" Foreground="{StaticResource MutedBrush}"
+                               Visibility="{Binding IsScanning, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <Popup x:Name="WarningsPopup" Placement="MousePoint" StaysOpen="False"
+               AllowsTransparency="True">
+            <Border Width="520" MaxHeight="420" Padding="20" CornerRadius="18"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                    Background="#FF151617">
+                <StackPanel>
+                    <TextBlock Text="확인하지 못한 항목" FontSize="18" FontWeight="SemiBold"
+                               Margin="0,0,0,12" />
+                    <ListBox ItemsSource="{Binding Warnings}" DisplayMemberPath="DisplayText"
+                             Background="Transparent" BorderThickness="0" />
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <Popup x:Name="CardPopup" AllowsTransparency="True" Placement="Right"
+               StaysOpen="True" IsHitTestVisible="False" HorizontalOffset="12">
+            <Border Width="430" Padding="24" CornerRadius="18"
+                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                    Background="#FF202123">
+                <StackPanel>
+                    <TextBlock Text="{Binding OriginalTitle}"
+                               Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock Text="{Binding DisplayTitle}" FontSize="22"
+                               FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Director, StringFormat=감독  {0}}"
+                               Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding ActorsText, StringFormat=주요 배우  {0}}" />
+                    <TextBlock Text="{Binding Record.Synopsis}" TextWrapping="Wrap"
+                               Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0" />
+                </StackPanel>
+            </Border>
+        </Popup>
     </Grid>
 </Window>

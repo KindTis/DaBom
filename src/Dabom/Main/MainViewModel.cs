@@ -193,6 +193,23 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public async Task InitializeAsync(string? startupWarning)
+    {
+        if (!string.IsNullOrWhiteSpace(startupWarning))
+        {
+            StatusMessage = startupWarning;
+        }
+        else if (Locations.Count == 0)
+        {
+            StatusMessage = "보관 위치를 추가해 동영상 라이브러리를 시작하세요.";
+        }
+
+        if (Locations.Count > 0)
+        {
+            await ScanAsync();
+        }
+    }
+
     public async Task ScanAsync()
     {
         if (IsScanning || IsRecordingPlayback) return;
