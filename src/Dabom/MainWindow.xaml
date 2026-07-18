@@ -364,12 +364,18 @@
             <Border Width="520" MaxHeight="420" Padding="20" CornerRadius="18"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                     Background="#FF151617">
-                <StackPanel>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
                     <TextBlock Text="확인하지 못한 항목" FontSize="18" FontWeight="SemiBold"
                                Margin="0,0,0,12" />
-                    <ListBox ItemsSource="{Binding Warnings}" DisplayMemberPath="DisplayText"
-                             Background="Transparent" BorderThickness="0" />
-                </StackPanel>
+                    <ListBox x:Name="WarningsList" Grid.Row="1"
+                             ItemsSource="{Binding Warnings}" DisplayMemberPath="DisplayText"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                </Grid>
             </Border>
         </Popup>
 
