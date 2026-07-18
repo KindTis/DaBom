@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Data;
+using System.Windows.Input;
 
 namespace Dabom.Main;
 
@@ -35,6 +36,23 @@ public sealed class MainViewModel : ViewModelBase
         _launch = launch;
         _utcNow = utcNow;
         _pickIndex = pickIndex;
+        RescanCommand = new AsyncRelayCommand(ScanAsync, () => CanMutateLibrary);
+        PlayCommand = new AsyncRelayCommand(
+            () => SelectedVideo is null ? Task.CompletedTask : PlayAsync(SelectedVideo),
+            () => CanMutateLibrary && SelectedVideo is not null);
+        PlayFeaturedCommand = new AsyncRelayCommand(
+            () => FeaturedVideo is null ? Task.CompletedTask : PlayAsync(FeaturedVideo),
+            () => CanMutateLibrary && FeaturedVideo is not null);
+        OpenMetadataCommand = new RelayCommand(
+            _ =>
+            {
+                var editor = CreateMetadataEditor();
+                if (editor is not null) MetadataEditRequested?.Invoke(this, editor);
+            },
+            _ => CanMutateLibrary && SelectedVideo is not null);
+        RemoveLocationCommand = new RelayCommand(
+            path => _ = RemoveLocationAsync((string)path!),
+            path => CanMutateLibrary && path is string);
         Locations = new(data.Locations);
         _visibleVideos = (ListCollectionView)CollectionViewSource.GetDefaultView(Videos);
         _visibleVideos.Filter = item => ((VideoItemViewModel)item).Matches(SearchText);
@@ -51,19 +69,31 @@ public sealed class MainViewModel : ViewModelBase
     public ObservableCollection<ScanWarning> Warnings { get; } = [];
     public System.ComponentModel.ICollectionView VisibleVideos => _visibleVideos;
     public int VisibleCount => VisibleVideos.Cast<object>().Count();
+    public ICommand RescanCommand { get; }
+    public ICommand PlayCommand { get; }
+    public ICommand PlayFeaturedCommand { get; }
+    public ICommand OpenMetadataCommand { get; }
+    public ICommand RemoveLocationCommand { get; }
+    public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
 
     private VideoItemViewModel? _selectedVideo;
     public VideoItemViewModel? SelectedVideo
     {
         get => _selectedVideo;
-        set => Set(ref _selectedVideo, value);
+        set
+        {
+            if (Set(ref _selectedVideo, value)) RefreshCommandStates();
+        }
     }
 
     private VideoItemViewModel? _featuredVideo;
     public VideoItemViewModel? FeaturedVideo
     {
         get => _featuredVideo;
-        private set => Set(ref _featuredVideo, value);
+        private set
+        {
+            if (Set(ref _featuredVideo, value)) RefreshCommandStates();
+        }
     }
 
     private bool _isScanning;
@@ -72,7 +102,11 @@ public sealed class MainViewModel : ViewModelBase
         get => _isScanning;
         private set
         {
-            if (Set(ref _isScanning, value)) Raise(nameof(CanMutateLibrary));
+            if (Set(ref _isScanning, value))
+            {
+                Raise(nameof(CanMutateLibrary));
+                RefreshCommandStates();
+            }
         }
     }
 
@@ -82,7 +116,11 @@ public sealed class MainViewModel : ViewModelBase
         get => _isChangingLocations;
         private set
         {
-            if (Set(ref _isChangingLocations, value)) Raise(nameof(CanMutateLibrary));
+            if (Set(ref _isChangingLocations, value))
+            {
+                Raise(nameof(CanMutateLibrary));
+                RefreshCommandStates();
+            }
         }
     }
 
@@ -92,12 +130,21 @@ public sealed class MainViewModel : ViewModelBase
         get => _isRecordingPlayback;
         private set
         {
-            if (Set(ref _isRecordingPlayback, value)) Raise(nameof(CanMutateLibrary));
+            if (Set(ref _isRecordingPlayback, value))
+            {
+                Raise(nameof(CanMutateLibrary));
+                RefreshCommandStates();
+            }
         }
     }
 
     public bool CanMutateLibrary =>
         _store.CanSave && !IsScanning && !IsChangingLocations && !IsRecordingPlayback;
+
+    public void NotifyMissingSelection()
+    {
+        if (CanMutateLibrary) StatusMessage = "먼저 영상을 선택하세요";
+    }
 
     private string _statusMessage = string.Empty;
     public string StatusMessage
@@ -453,6 +500,15 @@ public sealed class MainViewModel : ViewModelBase
             _ => StringComparer.CurrentCultureIgnoreCase.Compare(left.DisplayTitle, right.DisplayTitle)
         });
         _visibleVideos.Refresh();
+    }
+
+    private void RefreshCommandStates()
+    {
+        ((AsyncRelayCommand)RescanCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)PlayCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)PlayFeaturedCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)OpenMetadataCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)RemoveLocationCommand).RaiseCanExecuteChanged();
     }
 
     private static int CompareNullableDescending<T>(T? left, T? right)
