@@ -1,4 +1,5 @@
 using Dabom.Library;
+using Dabom.Metadata;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -147,7 +148,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public async Task ScanAsync()
     {
-        if (IsScanning) return;
+        if (IsScanning || IsRecordingPlayback) return;
         IsScanning = true;
         try
         {
@@ -277,6 +278,129 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public async Task PlayAsync(VideoItemViewModel video)
+    {
+        if (!CanMutateLibrary) return;
+        IsRecordingPlayback = true;
+        try
+        {
+            try
+            {
+                if (!_launch(video.Path))
+                {
+                    throw new InvalidOperationException("기본 앱을 실행하지 못했습니다.");
+                }
+            }
+            catch (Exception error)
+            {
+                StatusMessage = $"영상을 재생하지 못했습니다: {error.Message}";
+                return;
+            }
+
+            var updated = video.Record with { LastPlayedUtc = _utcNow() };
+            var records = new Dictionary<string, VideoRecord>(
+                _data.VideosByPath, StringComparer.OrdinalIgnoreCase)
+            {
+                [video.Path] = updated
+            };
+            var next = _data with { VideosByPath = records };
+            try
+            {
+                await _store.SaveAsync(next);
+                _data = next;
+                video.Update(updated, _store);
+                StatusMessage = "영상을 기본 앱으로 실행했습니다.";
+            }
+            catch (Exception error)
+            {
+                StatusMessage = $"영상은 실행했지만 재생 이력 저장 실패: {error.Message}";
+            }
+        }
+        finally
+        {
+            IsRecordingPlayback = false;
+        }
+    }
+
+    public MetadataEditorViewModel? CreateMetadataEditor() =>
+        SelectedVideo is null || !CanMutateLibrary
+            ? null
+            : new MetadataEditorViewModel(
+                SelectedVideo.Path,
+                SelectedVideo.Record,
+                SelectedVideo.Poster,
+                CommitMetadataAsync);
+
+    private async Task<string?> CommitMetadataAsync(
+        MetadataEditorViewModel editor,
+        CancellationToken cancellationToken)
+    {
+        string? newPoster = editor.OriginalRecord.Poster;
+        try
+        {
+            if (editor.SelectedPosterSourcePath is not null)
+            {
+                newPoster = await _store.ImportPosterAsync(
+                    editor.Path, editor.SelectedPosterSourcePath, cancellationToken);
+            }
+            else if (editor.RemovePoster)
+            {
+                newPoster = null;
+            }
+
+            var updated = editor.OriginalRecord with
+            {
+                Title = NullIfWhiteSpace(editor.Title),
+                OriginalTitle = NullIfWhiteSpace(editor.OriginalTitle),
+                ReleaseDate = editor.ReleaseDate is DateTime date
+                    ? DateOnly.FromDateTime(date)
+                    : null,
+                Director = NullIfWhiteSpace(editor.Director),
+                Actors = editor.ParsedActors(),
+                Synopsis = NullIfWhiteSpace(editor.Synopsis),
+                Poster = newPoster
+            };
+            var records = new Dictionary<string, VideoRecord>(
+                _data.VideosByPath, StringComparer.OrdinalIgnoreCase)
+            {
+                [editor.Path] = updated
+            };
+            var next = _data with { VideosByPath = records };
+            await _store.SaveAsync(next, cancellationToken);
+
+            _data = next;
+            var video = Videos.Single(video =>
+                video.Path.Equals(editor.Path, StringComparison.OrdinalIgnoreCase));
+            video.Update(updated, _store);
+            VisibleVideos.Refresh();
+            Raise(nameof(VisibleCount));
+            if (ReferenceEquals(SelectedVideo, video) && !video.Matches(SearchText))
+            {
+                SelectedVideo = null;
+            }
+
+            if (!string.Equals(
+                editor.OriginalRecord.Poster, newPoster, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    _store.DeletePoster(editor.OriginalRecord.Poster);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    StatusMessage =
+                        $"메타데이터는 저장했지만 이전 포스터를 정리하지 못했습니다: {error.Message}";
+                }
+            }
+
+            return null;
+        }
+        catch (Exception error)
+        {
+            return $"메타데이터를 저장하지 못했습니다: {error.Message}";
+        }
+    }
+
     private void ApplyCurrentVideos(IEnumerable<string> currentPaths)
     {
         var current = currentPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -337,6 +461,9 @@ public sealed class MainViewModel : ViewModelBase
         : left.HasValue ? -1
         : right.HasValue ? 1
         : 0;
+
+    private static string? NullIfWhiteSpace(string value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool LaunchWithWindows(string path)
     {

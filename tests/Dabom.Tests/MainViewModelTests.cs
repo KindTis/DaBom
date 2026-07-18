@@ -1,6 +1,11 @@
 using Dabom.Library;
 using Dabom.Main;
+using Dabom.Metadata;
 using System.IO;
+using System.Runtime.ExceptionServices;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace Dabom.Tests;
 
@@ -268,6 +273,290 @@ public sealed class MainViewModelTests
         }
     }
 
+    [TestMethod]
+    public async Task PlayAsync_WhenLaunchFails_DoesNotChangeHistory()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-play-launch-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            var vm = new MainViewModel(
+                new LibraryStore(root.FullName), new StubScanner(path), data,
+                _ => false, () => DateTimeOffset.Parse("2026-07-18T12:00:00Z"), _ => 0);
+            await vm.ScanAsync();
+            var video = vm.Videos.Single();
+            var featured = vm.FeaturedVideo;
+
+            await vm.PlayAsync(video);
+
+            Assert.IsNull(video.Record.LastPlayedUtc);
+            Assert.AreSame(featured, vm.FeaturedVideo);
+            StringAssert.Contains(vm.StatusMessage, "영상을 재생하지 못했습니다");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task PlayAsync_WhenHistorySaveFails_KeepsMemoryAndFeaturedState()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-play-save-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            var store = new LibraryStore(
+                root.FullName, (_, _, _) => throw new IOException("disk full"));
+            var vm = new MainViewModel(
+                store, new StubScanner(path), data,
+                _ => true, () => DateTimeOffset.Parse("2026-07-18T12:00:00Z"), _ => 0);
+            await vm.ScanAsync();
+            var video = vm.Videos.Single();
+            var featured = vm.FeaturedVideo;
+
+            await vm.PlayAsync(video);
+
+            Assert.IsNull(video.Record.LastPlayedUtc);
+            Assert.AreSame(featured, vm.FeaturedVideo);
+            StringAssert.Contains(vm.StatusMessage, "재생 이력 저장 실패");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task PlayAsync_RejectsConcurrentMutationsAndCommitsHistoryOnce()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-play-lock-");
+        try
+        {
+            var firstPath = Path.Combine(root.FullName, "First.mkv");
+            var secondPath = Path.Combine(root.FullName, "Second.mkv");
+            var data = CachedData(root.FullName, firstPath, secondPath);
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commits = 0;
+            var launches = 0;
+            var scanner = new StubScanner(firstPath, secondPath);
+            var store = new LibraryStore(root.FullName, async (temporary, destination, _) =>
+            {
+                commits++;
+                started.TrySetResult();
+                await release.Task;
+                File.Replace(temporary, destination, null);
+            });
+            var playedAt = DateTimeOffset.Parse("2026-07-18T12:00:00Z");
+            var vm = new MainViewModel(
+                store, scanner, data,
+                _ => { launches++; return true; }, () => playedAt, _ => 0);
+            await vm.ScanAsync();
+            var firstVideo = vm.Videos.Single(video => video.Path == firstPath);
+            var secondVideo = vm.Videos.Single(video => video.Path == secondPath);
+            vm.SelectedVideo = firstVideo;
+            var featured = vm.FeaturedVideo;
+
+            var firstPlay = vm.PlayAsync(firstVideo);
+            await started.Task;
+
+            Assert.IsFalse(vm.CanMutateLibrary);
+            await vm.PlayAsync(secondVideo);
+            await vm.ScanAsync();
+            Assert.IsFalse(await vm.AddLocationAsync(Path.Combine(root.FullName, "Other")));
+            Assert.IsNull(vm.CreateMetadataEditor());
+            Assert.AreEqual(1, launches);
+            Assert.AreEqual(1, commits);
+            Assert.AreEqual(1, scanner.Calls);
+
+            release.TrySetResult();
+            await firstPlay;
+
+            Assert.IsTrue(vm.CanMutateLibrary);
+            Assert.AreSame(featured, vm.FeaturedVideo);
+            Assert.AreEqual(playedAt, firstVideo.Record.LastPlayedUtc);
+            var reloaded = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+            Assert.AreEqual(playedAt, reloaded.VideosByPath[firstPath].LastPlayedUtc);
+
+            await vm.ScanAsync();
+            Assert.AreSame(secondVideo, vm.FeaturedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void MetadataSave_WhenOldPosterCleanupFails_KeepsCommittedResult()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-metadata-cleanup-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var posters = Directory.CreateDirectory(Path.Combine(root.FullName, "posters"));
+                var oldPoster = Path.Combine(posters.FullName, "old.png");
+                WritePng(oldPoster);
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with { Poster = "posters/old.png" };
+                await new LibraryStore(root.FullName).SaveAsync(data);
+                var store = new LibraryStore(
+                    root.FullName, deletePoster: _ => throw new UnauthorizedAccessException("locked"));
+                var vm = CreateViewModel(store, new StubScanner(path), data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.MarkPosterRemoved();
+
+                var saved = await editor.SaveAsync();
+
+                Assert.IsTrue(saved);
+                Assert.IsNull(vm.Videos.Single().Record.Poster);
+                var reloaded = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+                Assert.IsNull(reloaded.VideosByPath[path].Poster);
+                StringAssert.Contains(vm.StatusMessage, "이전 포스터를 정리하지 못했습니다");
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_WhenTitleLeavesActiveSearch_ClearsSelection()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-metadata-search-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with { Title = "찾는 제목" };
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName), new StubScanner(path), data);
+                await vm.ScanAsync();
+                vm.SearchText = "찾는 제목";
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.Title = "다른 제목";
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.AreEqual(0, vm.VisibleCount);
+                Assert.IsNull(vm.SelectedVideo);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_ReappliesCurrentSort()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-metadata-sort-");
+            try
+            {
+                var firstPath = Path.Combine(root.FullName, "First.mkv");
+                var secondPath = Path.Combine(root.FullName, "Second.mkv");
+                var data = CachedData(root.FullName, firstPath, secondPath);
+                data.VideosByPath[firstPath] = data.VideosByPath[firstPath] with
+                {
+                    Title = "첫째",
+                    ReleaseDate = new DateOnly(2020, 1, 1)
+                };
+                data.VideosByPath[secondPath] = data.VideosByPath[secondPath] with
+                {
+                    Title = "둘째",
+                    ReleaseDate = new DateOnly(2021, 1, 1)
+                };
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName),
+                    new StubScanner(firstPath, secondPath), data);
+                await vm.ScanAsync();
+                vm.SelectedSort = VideoSort.ReleaseDate;
+                vm.SelectedVideo = vm.Videos.Single(video => video.Path == firstPath);
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.ReleaseDate = new DateTime(2022, 1, 1);
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                var ordered = vm.VisibleVideos.Cast<VideoItemViewModel>().ToArray();
+                Assert.AreEqual(firstPath, ordered[0].Path);
+                Assert.AreEqual(secondPath, ordered[1].Path);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task MetadataSave_WhenJsonCommitFails_PreservesOldStateAndNewPosterCopy()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-metadata-rollback-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var posters = Directory.CreateDirectory(Path.Combine(root.FullName, "posters"));
+            var oldPoster = Path.Combine(posters.FullName, "old.png");
+            var newPoster = Path.Combine(root.FullName, "new.png");
+            WritePng(oldPoster);
+            WritePng(newPoster);
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Title = "이전 제목",
+                Poster = "posters/old.png"
+            };
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var store = new LibraryStore(
+                root.FullName, (_, _, _) => throw new IOException("disk full"));
+            var vm = CreateViewModel(store, new StubScanner(path), data);
+            await vm.ScanAsync();
+            vm.SelectedVideo = vm.Videos.Single();
+            var editor = vm.CreateMetadataEditor();
+            Assert.IsNotNull(editor);
+            editor.Title = "새 제목";
+            editor.ChoosePoster(newPoster);
+            var preview = editor.PreviewPoster;
+
+            var saved = await editor.SaveAsync();
+
+            Assert.IsFalse(saved);
+            Assert.AreEqual("새 제목", editor.Title);
+            Assert.AreSame(preview, editor.PreviewPoster);
+            Assert.AreEqual(newPoster, editor.SelectedPosterSourcePath);
+            StringAssert.Contains(editor.ErrorMessage, "메타데이터를 저장하지 못했습니다");
+            Assert.AreEqual("이전 제목", vm.Videos.Single().Record.Title);
+            Assert.AreEqual("posters/old.png", vm.Videos.Single().Record.Poster);
+            Assert.IsTrue(File.Exists(oldPoster));
+            var reloaded = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+            Assert.AreEqual("이전 제목", reloaded.VideosByPath[path].Title);
+            Assert.AreEqual("posters/old.png", reloaded.VideosByPath[path].Poster);
+            Assert.AreEqual(2, Directory.EnumerateFiles(posters.FullName).Count());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     private static MainViewModel CreateViewModel(
         LibraryStore store,
         ILibraryScanner scanner,
@@ -296,6 +585,46 @@ public sealed class MainViewModelTests
                 [fullPath] = new(fullPath, size, DateTimeOffset.UnixEpoch, null)
             },
             [warning]);
+    }
+
+    private static void RunOnDispatcher(Func<Task> action)
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var frame = new DispatcherFrame();
+        Exception? failure = null;
+
+        async void Run()
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+            finally
+            {
+                frame.Continue = false;
+            }
+        }
+
+        dispatcher.BeginInvoke((Action)Run);
+        Dispatcher.PushFrame(frame);
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
+    private static void WritePng(string path)
+    {
+        var bitmap = BitmapSource.Create(
+            2, 2, 96, 96, PixelFormats.Bgra32, null, new byte[16], 8);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
     }
 
     private sealed class StubScanner(params string[] paths) : ILibraryScanner
