@@ -3,6 +3,7 @@ using Dabom.Metadata;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
@@ -11,6 +12,10 @@ namespace Dabom;
 
 public partial class MainWindow : Window
 {
+    private const int ExtendedStyle = -20;
+    private const long TransparentStyle = 0x20;
+    private const long NoActivateStyle = 0x08000000;
+
     private ListBoxItem? _hoveredCard;
     private ListBoxItem? _focusedCard;
 
@@ -143,6 +148,17 @@ public partial class MainWindow : Window
         CardPopup.PlacementTarget = activeCard;
         CardPopup.DataContext = activeCard.DataContext;
         CardPopup.IsOpen = true;
+        MakeCardPopupClickThrough();
+    }
+
+    private void MakeCardPopupClickThrough()
+    {
+        if (PresentationSource.FromVisual(CardPopup.Child) is not HwndSource source) return;
+        var style = GetWindowLongPtr(source.Handle, ExtendedStyle).ToInt64();
+        SetWindowLongPtr(
+            source.Handle,
+            ExtendedStyle,
+            new IntPtr(style | TransparentStyle | NoActivateStyle));
     }
 
     private void OnCardEnter(object sender, MouseEventArgs e)
@@ -218,4 +234,10 @@ public partial class MainWindow : Window
             });
         }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
 }

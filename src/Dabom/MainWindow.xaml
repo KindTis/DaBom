@@ -4,6 +4,7 @@
         xmlns:main="clr-namespace:Dabom.Main"
         xmlns:library="clr-namespace:Dabom.Library"
         Title="DABOM" Width="1440" Height="1000" MinWidth="760" MinHeight="640"
+        Style="{StaticResource {x:Type Window}}"
         PreviewKeyDown="OnPreviewKeyDown" Loaded="OnLoaded">
     <Grid>
         <Canvas x:Name="DustCanvas" IsHitTestVisible="False" />
@@ -79,11 +80,11 @@
                             <TextBlock Text="{Binding DisplayTitle}" FontSize="58"
                                        FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock Margin="0,14,0,0">
-                                <Run Text="{Binding ReleaseYear}" />
+                                <Run Text="{Binding ReleaseYear, Mode=OneWay}" />
                                 <Run Text=" · " />
-                                <Run Text="{Binding Director}" />
+                                <Run Text="{Binding Director, Mode=OneWay}" />
                                 <Run Text=" · " />
-                                <Run Text="{Binding DurationText}" />
+                                <Run Text="{Binding DurationText, Mode=OneWay}" />
                             </TextBlock>
                             <TextBlock Text="{Binding Record.Synopsis}"
                                        Foreground="{StaticResource MutedBrush}"
@@ -156,7 +157,7 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock VerticalAlignment="Center">
                         <Run Text="내 영상 " />
-                        <Run Text="{Binding VisibleCount}" FontSize="22" />
+                        <Run Text="{Binding VisibleCount, Mode=OneWay}" FontSize="22" />
                         <Run Text="편" />
                     </TextBlock>
                     <TextBox x:Name="SearchBox" Grid.Column="1" Margin="22,0"
@@ -196,6 +197,7 @@
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
                             <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
                             <Setter Property="Margin" Value="0,0,22,42" />
                             <Setter Property="Padding" Value="0" />
                             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
@@ -268,9 +270,9 @@
                                 <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold"
                                            TextTrimming="CharacterEllipsis" Margin="5,15,5,0" />
                                 <TextBlock Foreground="{StaticResource MutedBrush}" Margin="5,7,5,0">
-                                    <Run Text="{Binding ReleaseYear}" />
+                                    <Run Text="{Binding ReleaseYear, Mode=OneWay}" />
                                     <Run Text=" · " />
-                                    <Run Text="{Binding Director}" />
+                                    <Run Text="{Binding Director, Mode=OneWay}" />
                                 </TextBlock>
                             </StackPanel>
                         </DataTemplate>
@@ -304,8 +306,8 @@
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal"
                                 HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <Button Content="{Binding Warnings.Count, StringFormat=경고 {0}건}"
-                                Click="OnToggleWarnings" Margin="0,0,10,0">
+                        <Button Click="OnToggleWarnings" Margin="0,0,10,0"
+                                AutomationProperties.Name="{Binding Warnings.Count, Mode=OneWay, StringFormat='경고 {0}건'}">
                             <Button.Style>
                                 <Style TargetType="Button"
                                        BasedOn="{StaticResource {x:Type Button}}">
@@ -316,6 +318,11 @@
                                     </Style.Triggers>
                                 </Style>
                             </Button.Style>
+                            <TextBlock>
+                                <Run Text="경고 " />
+                                <Run Text="{Binding Warnings.Count, Mode=OneWay}" />
+                                <Run Text="건" />
+                            </TextBlock>
                         </Button>
                         <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}" />
                     </StackPanel>

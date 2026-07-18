@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="메타데이터 편집" Width="920" Height="760"
         MinWidth="760" MinHeight="620"
+        Style="{StaticResource {x:Type Window}}"
         WindowStartupLocation="CenterOwner" Closing="OnClosing">
     <Grid Margin="28" IsEnabled="{Binding IsNotSaving}">
         <Grid.ColumnDefinitions>
@@ -98,11 +99,11 @@
                 <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding FileSizeText}"
                            Margin="0,12,0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="8" Text="수정일" Margin="0,6,12" />
+                <TextBlock Grid.Row="8" Text="수정일" Margin="0,6,12,6" />
                 <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding ModifiedText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="9" Text="재생시간" Margin="0,6,12" />
+                <TextBlock Grid.Row="9" Text="재생시간" Margin="0,6,12,6" />
                 <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding DurationText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
