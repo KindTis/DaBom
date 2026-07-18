@@ -6,6 +6,50 @@
         Title="DABOM" Width="1440" Height="1000" MinWidth="760" MinHeight="640"
         Style="{StaticResource {x:Type Window}}"
         PreviewKeyDown="OnPreviewKeyDown" Loaded="OnLoaded">
+    <Window.Resources>
+        <Style x:Key="PrimaryActionButtonStyle" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{StaticResource PageBrush}" />
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="20,12" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="PrimaryButtonBorder"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="999"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="PrimaryButtonBorder" Property="Background"
+                                        Value="{StaticResource TextBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="PrimaryButtonBorder" Property="Opacity" Value="0.82" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="PrimaryButtonBorder" Property="BorderBrush"
+                                        Value="{StaticResource TextBrush}" />
+                                <Setter TargetName="PrimaryButtonBorder" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="PrimaryButtonBorder" Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Canvas x:Name="DustCanvas" IsHitTestVisible="False" />
 
@@ -36,6 +80,10 @@
                 <Border Grid.Row="1" Margin="0,28,0,0" Padding="34" CornerRadius="28"
                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                         Background="#FF171819">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="38" ShadowDepth="16"
+                                          Direction="270" Opacity="0.34" />
+                    </Border.Effect>
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Visible" />
@@ -90,9 +138,17 @@
                                        Foreground="{StaticResource MutedBrush}"
                                        TextWrapping="Wrap" MaxWidth="650" Margin="0,18,0,0"
                                        HorizontalAlignment="Left" />
-                            <Button Content="재생하기"
+                            <Button Style="{StaticResource PrimaryActionButtonStyle}"
                                     Command="{Binding DataContext.PlayFeaturedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    Margin="0,26,0,0" HorizontalAlignment="Left" />
+                                    Margin="0,26,0,0" HorizontalAlignment="Left"
+                                    AutomationProperties.Name="재생하기">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Width="8" Height="10" Margin="0,0,9,0"
+                                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          Data="M 0 0 L 8 5 L 0 10 Z" />
+                                    <TextBlock Text="재생하기" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -149,29 +205,110 @@
                     </StackPanel>
                 </Border>
 
-                <Grid Grid.Row="2" Margin="0,24,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="150" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock VerticalAlignment="Center">
-                        <Run Text="내 영상 " />
-                        <Run Text="{Binding VisibleCount, Mode=OneWay}" FontSize="22" />
-                        <Run Text="편" />
-                    </TextBlock>
-                    <TextBox x:Name="SearchBox" Grid.Column="1" Margin="22,0"
-                             Height="54" Padding="18,0" VerticalContentAlignment="Center"
-                             ToolTip="제목, 감독, 배우 검색 (Ctrl+K)"
-                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
-                    <ComboBox Grid.Column="2" Width="150" Height="54"
-                              SelectedValue="{Binding SelectedSort}"
-                              SelectedValuePath="Tag">
-                        <ComboBoxItem Content="제목" Tag="{x:Static library:VideoSort.Title}" />
-                        <ComboBoxItem Content="개봉일" Tag="{x:Static library:VideoSort.ReleaseDate}" />
-                        <ComboBoxItem Content="파일 수정일" Tag="{x:Static library:VideoSort.FileModified}" />
-                    </ComboBox>
-                </Grid>
+                <Border x:Name="LibraryToolbar" Grid.Row="2" Margin="0,24,0,0"
+                        Padding="18,15" CornerRadius="18"
+                        Background="#E6121314"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="24" ShadowDepth="9"
+                                          Direction="270" Opacity="0.28" />
+                    </Border.Effect>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Grid VerticalAlignment="Center">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="내 영상" FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Margin="6,0,0,0" FontSize="22" FontWeight="SemiBold">
+                                    <Run Text="{Binding VisibleCount, Mode=OneWay}" />
+                                    <Run Text="편" />
+                                </TextBlock>
+                            </StackPanel>
+                            <TextBlock Grid.Row="1" Text="현재 조건의 영상을 표시하고 있습니다."
+                                       FontSize="9" Foreground="{StaticResource MutedBrush}" />
+                        </Grid>
+
+                        <Border Grid.Column="1" Height="54" Margin="22,0"
+                                CornerRadius="14" Background="#B8141516"
+                                BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="18" Height="18" Margin="18,0,12,0"
+                                      VerticalAlignment="Center">
+                                    <Ellipse Width="12" Height="12" Margin="1,1,0,0"
+                                             HorizontalAlignment="Left" VerticalAlignment="Top"
+                                             Stroke="{StaticResource MutedBrush}" StrokeThickness="1.5" />
+                                    <Line X1="11" Y1="11" X2="17" Y2="17"
+                                          Stroke="{StaticResource MutedBrush}" StrokeThickness="1.5" />
+                                </Grid>
+                                <TextBox x:Name="SearchBox" Grid.Column="1"
+                                         Height="52" Padding="0"
+                                         Background="Transparent" BorderThickness="0"
+                                         VerticalContentAlignment="Center"
+                                         AutomationProperties.Name="영상 검색"
+                                         ToolTip="제목, 감독, 배우 검색 (Ctrl+K)"
+                                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBlock Grid.Column="1" Text="제목, 감독, 배우 이름으로 검색"
+                                           IsHitTestVisible="False" VerticalAlignment="Center"
+                                           Foreground="{StaticResource MutedBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <Border Grid.Column="2" Margin="12,0,18,0" Padding="7,4"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Background="{StaticResource RaisedBrush}"
+                                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                                    <TextBlock Text="Ctrl K" FontSize="10"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="정렬" Margin="0,0,10,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource MutedBrush}" />
+                            <Border CornerRadius="999" Background="{StaticResource RaisedBrush}"
+                                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                                <ComboBox Width="120" Height="40"
+                                          Background="Transparent" BorderBrush="Transparent"
+                                          AutomationProperties.Name="정렬"
+                                          SelectedValue="{Binding SelectedSort}"
+                                          SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="제목" Tag="{x:Static library:VideoSort.Title}" />
+                                    <ComboBoxItem Content="개봉일" Tag="{x:Static library:VideoSort.ReleaseDate}" />
+                                    <ComboBoxItem Content="파일 수정일" Tag="{x:Static library:VideoSort.FileModified}" />
+                                </ComboBox>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
                 <ListBox x:Name="VideoList" Grid.Row="3" Margin="0,30,0,0"
                          BorderThickness="0" Background="Transparent"
@@ -381,20 +518,87 @@
 
         <Popup x:Name="CardPopup" AllowsTransparency="True" Placement="Right"
                StaysOpen="True" IsHitTestVisible="False" HorizontalOffset="12">
-            <Border Width="430" Padding="24" CornerRadius="18"
-                    BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
-                    Background="#FF202123">
-                <StackPanel>
-                    <TextBlock Text="{Binding OriginalTitle}"
-                               Foreground="{StaticResource AccentBrush}" />
-                    <TextBlock Text="{Binding DisplayTitle}" FontSize="22"
-                               FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock Text="{Binding Director, StringFormat=감독  {0}}"
-                               Margin="0,12,0,0" />
-                    <TextBlock Text="{Binding ActorsText, StringFormat=주요 배우  {0}}" />
-                    <TextBlock Text="{Binding Record.Synopsis}" TextWrapping="Wrap"
-                               Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0" />
-                </StackPanel>
+            <Border Width="430" CornerRadius="18"
+                    BorderBrush="#33E7E5DF" BorderThickness="1">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#FF141516" Offset="0" />
+                        <GradientStop Color="#FF262729" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="42" ShadowDepth="16"
+                                      Direction="270" Opacity="0.62" />
+                </Border.Effect>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="126" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border CornerRadius="18,0,0,18" ClipToBounds="True"
+                            Background="{StaticResource SurfaceBrush}">
+                        <Grid>
+                            <Image Source="{Binding Poster}" Stretch="UniformToFill" />
+                            <TextBlock Text="NO POSTER" HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource MutedBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasPoster}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="24,22">
+                        <TextBlock Text="{Binding OriginalTitle}" FontSize="10"
+                                   FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="{Binding DisplayTitle}" FontSize="22"
+                                   FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <Border Height="1" Margin="0,16,0,8"
+                                Background="{StaticResource LineBrush}" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="68" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="상영일" FontSize="10"
+                                       Foreground="{StaticResource MutedBrush}" />
+                            <TextBlock Grid.Column="1" Text="{Binding ReleaseYear}"
+                                       FontSize="11" />
+                            <TextBlock Grid.Row="1" Text="감독" Margin="0,10,0,0"
+                                       FontSize="10" Foreground="{StaticResource MutedBrush}" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Director}"
+                                       Margin="0,10,0,0" FontSize="11" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="2" Text="주요 배우" Margin="0,10,0,0"
+                                       FontSize="10" Foreground="{StaticResource MutedBrush}" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding ActorsText}"
+                                       Margin="0,10,0,0" FontSize="11" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="3" Text="영상" Margin="0,10,0,0"
+                                       FontSize="10" Foreground="{StaticResource MutedBrush}" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding DurationText}"
+                                       Margin="0,10,0,0" FontSize="11" />
+                        </Grid>
+                        <Border Height="1" Margin="0,16,0,14"
+                                Background="{StaticResource LineBrush}" />
+                        <TextBlock Text="시놉시스" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock Text="{Binding Record.Synopsis}" TextWrapping="Wrap"
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,7,0,0"
+                                   FontSize="11" LineHeight="18" />
+                    </StackPanel>
+                </Grid>
             </Border>
         </Popup>
     </Grid>
