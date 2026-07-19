@@ -17,7 +17,7 @@
 
         <StackPanel>
             <Border Width="240" Height="360" Background="{StaticResource SurfaceBrush}"
-                    CornerRadius="16" ClipToBounds="True">
+                    CornerRadius="{StaticResource SurfaceCornerRadius}" ClipToBounds="True">
                 <Grid>
                     <Image x:Name="PosterPreview" Source="{Binding PreviewPoster}"
                            Stretch="UniformToFill" />

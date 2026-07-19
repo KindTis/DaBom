@@ -169,6 +169,13 @@ public partial class MainWindow : Window
             new IntPtr(style | TransparentStyle | NoActivateStyle));
     }
 
+    private void OnRoundedClipSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is not Border border || border.Child is not UIElement child) return;
+        var radius = Math.Max(0, border.CornerRadius.TopLeft - border.BorderThickness.Left);
+        child.Clip = new RectangleGeometry(new Rect(child.RenderSize), radius, radius);
+    }
+
     private void OnCardEnter(object sender, MouseEventArgs e)
     {
         var card = (ListBoxItem)sender;

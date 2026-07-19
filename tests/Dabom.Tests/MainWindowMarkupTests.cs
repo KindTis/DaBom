@@ -6,6 +6,32 @@ namespace Dabom.Tests;
 public sealed class MainWindowMarkupTests
 {
     [TestMethod]
+    public void MainWindow_StartsCenteredOnScreen()
+    {
+        var markup = ReadMainWindowMarkup();
+
+        StringAssert.Contains(markup, "WindowStartupLocation=\"CenterScreen\"");
+    }
+
+    [TestMethod]
+    public void RoundedElements_UseSharedCornerRadiusScale()
+    {
+        var markup = ReadMainWindowMarkup();
+        var theme = ReadThemeMarkup();
+
+        StringAssert.Contains(theme, "<CornerRadius x:Key=\"ControlCornerRadius\">12</CornerRadius>");
+        StringAssert.Contains(theme, "<CornerRadius x:Key=\"SurfaceCornerRadius\">16</CornerRadius>");
+        StringAssert.Contains(theme, "<CornerRadius x:Key=\"HeroCornerRadius\">28</CornerRadius>");
+        StringAssert.Contains(theme, "x:Name=\"ButtonBorder\"");
+        StringAssert.Contains(theme, "x:Name=\"TextBoxBorder\"");
+        StringAssert.Contains(theme, "x:Name=\"ItemBorder\"");
+        StringAssert.Contains(markup, "CornerRadius=\"{StaticResource ControlCornerRadius}\"");
+        StringAssert.Contains(markup, "CornerRadius=\"{StaticResource SurfaceCornerRadius}\"");
+        StringAssert.Contains(markup, "CornerRadius=\"{StaticResource HeroCornerRadius}\"");
+        Assert.IsFalse(markup.Contains("CornerRadius=\"999\"", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void WarningButton_ExposesExactAccessibleName()
     {
         var markup = ReadMainWindowMarkup();
@@ -95,7 +121,7 @@ public sealed class MainWindowMarkupTests
                 "<Border CornerRadius=\"999\" Background=\"{StaticResource RaisedBrush}\"",
                 StringComparison.Ordinal));
         StringAssert.Contains(theme, "x:Key=\"ReferenceSortComboBoxStyle\"");
-        StringAssert.Contains(theme, "CornerRadius=\"20\"");
+        StringAssert.Contains(theme, "CornerRadius=\"{StaticResource ControlCornerRadius}\"");
     }
 
     [TestMethod]
@@ -137,6 +163,23 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.RelativePoint;");
         StringAssert.Contains(code, "CardPopup.PlacementRectangle = new Rect(");
         StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.Right;");
+    }
+
+    [TestMethod]
+    public void RoundedSurfaces_ClipContentInsideSeparateShadowHosts()
+    {
+        var markup = ReadMainWindowMarkup();
+        var code = ReadMainWindowCode();
+
+        StringAssert.Contains(markup, "x:Name=\"FeaturedHeroSurface\"");
+        StringAssert.Contains(markup, "x:Name=\"CardPopupSurface\"");
+        Assert.AreEqual(
+            2,
+            markup.Split("SizeChanged=\"OnRoundedClipSizeChanged\"", StringSplitOptions.None).Length - 1);
+        StringAssert.Contains(code, "private void OnRoundedClipSizeChanged");
+        StringAssert.Contains(
+            code,
+            "child.Clip = new RectangleGeometry(new Rect(child.RenderSize), radius, radius)");
     }
 
     private static string ReadMainWindowMarkup()

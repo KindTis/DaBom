@@ -4,11 +4,12 @@
         xmlns:main="clr-namespace:Dabom.Main"
         xmlns:library="clr-namespace:Dabom.Library"
         Title="DABOM" Width="1440" Height="1000" MinWidth="760" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
         Style="{StaticResource {x:Type Window}}"
         PreviewKeyDown="OnPreviewKeyDown" Loaded="OnLoaded">
     <Window.Resources>
-        <Style x:Key="PrimaryActionButtonStyle" TargetType="Button">
-            <Setter Property="Cursor" Value="Hand" />
+        <Style x:Key="PrimaryActionButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Foreground" Value="{StaticResource PageBrush}" />
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
@@ -22,7 +23,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="PrimaryButtonBorder"
                                 Padding="{TemplateBinding Padding}"
-                                CornerRadius="999"
+                                CornerRadius="{StaticResource ControlCornerRadius}"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
@@ -122,9 +123,9 @@
                 </Grid>
 
                 <Border x:Name="FeaturedHero" Grid.Row="1" Margin="0,28,0,0" MinHeight="392"
-                        CornerRadius="28"
+                        CornerRadius="{StaticResource HeroCornerRadius}"
                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
-                        Background="#FF171819" ClipToBounds="True">
+                        Background="#FF171819" SizeChanged="OnRoundedClipSizeChanged">
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="38" ShadowDepth="16"
                                           Direction="270" Opacity="0.34" />
@@ -139,7 +140,7 @@
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <Grid DataContext="{Binding FeaturedVideo}">
+                    <Grid x:Name="FeaturedHeroSurface" DataContext="{Binding FeaturedVideo}">
                         <Image x:Name="FeaturedBackdrop" Source="{Binding Poster}"
                                Height="392"
                                Stretch="UniformToFill" Opacity="0.34"
@@ -162,7 +163,8 @@
                                 <ColumnDefinition Width="210" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <Border Width="210" Height="315" CornerRadius="16"
+                            <Border Width="210" Height="315"
+                                    CornerRadius="{StaticResource SurfaceCornerRadius}"
                                     BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                                     Background="{StaticResource SurfaceBrush}">
                                 <Grid>
@@ -224,7 +226,8 @@
                 </Border>
 
                 <Border Grid.Row="1" Margin="0,28,0,0" MinHeight="380" Padding="50"
-                        CornerRadius="28" BorderBrush="{StaticResource LineBrush}"
+                        CornerRadius="{StaticResource HeroCornerRadius}"
+                        BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1" Background="#FF171819">
                     <Border.Style>
                         <Style TargetType="Border">
@@ -250,7 +253,8 @@
                 </Border>
 
                 <Border Grid.Row="1" Margin="0,28,0,0" MinHeight="380" Padding="50"
-                        CornerRadius="28" BorderBrush="{StaticResource LineBrush}"
+                        CornerRadius="{StaticResource HeroCornerRadius}"
+                        BorderBrush="{StaticResource LineBrush}"
                         BorderThickness="1" Background="#FF171819">
                     <Border.Style>
                         <Style TargetType="Border">
@@ -276,7 +280,7 @@
                 </Border>
 
                 <Border x:Name="LibraryToolbar" Grid.Row="2" Margin="0,24,0,0"
-                        Padding="18,15" CornerRadius="18"
+                        Padding="18,15" CornerRadius="{StaticResource SurfaceCornerRadius}"
                         Background="#E6121314"
                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                     <Border.Effect>
@@ -309,7 +313,8 @@
                         </Grid>
 
                         <Border Grid.Column="1" Height="54" Margin="22,0"
-                                CornerRadius="14" Background="#B8141516"
+                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                Background="#B8141516"
                                 BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -351,6 +356,7 @@
                                 </TextBlock>
                                 <Border Grid.Column="2" Margin="12,0,18,0" Padding="7,4"
                                         HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        CornerRadius="{StaticResource ControlCornerRadius}"
                                         Background="{StaticResource RaisedBrush}"
                                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
                                     <TextBlock Text="Ctrl K" FontSize="10"
@@ -409,6 +415,7 @@
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ListBoxItem">
                                         <Border Background="{TemplateBinding Background}"
+                                                CornerRadius="{StaticResource ControlCornerRadius}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter
                                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
@@ -434,7 +441,8 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type main:VideoItemViewModel}">
                             <StackPanel Width="175">
-                                <Border Width="175" Height="262.5" CornerRadius="16"
+                                <Border Width="175" Height="262.5"
+                                        CornerRadius="{StaticResource SurfaceCornerRadius}"
                                         Background="{StaticResource SurfaceBrush}">
                                     <Border.Style>
                                         <Style TargetType="Border">
@@ -541,7 +549,8 @@
 
         <Popup x:Name="LocationsPopup" Placement="MousePoint" StaysOpen="False"
                AllowsTransparency="True">
-            <Border Width="370" Padding="20" CornerRadius="18"
+            <Border Width="370" Padding="20"
+                    CornerRadius="{StaticResource SurfaceCornerRadius}"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                     Background="#FF151617">
                 <StackPanel>
@@ -570,7 +579,8 @@
 
         <Popup x:Name="WarningsPopup" Placement="MousePoint" StaysOpen="False"
                AllowsTransparency="True">
-            <Border Width="520" MaxHeight="420" Padding="20" CornerRadius="18"
+            <Border Width="520" MaxHeight="420" Padding="20"
+                    CornerRadius="{StaticResource SurfaceCornerRadius}"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
                     Background="#FF151617">
                 <Grid>
@@ -590,8 +600,9 @@
 
         <Popup x:Name="CardPopup" AllowsTransparency="True" Placement="Right"
                StaysOpen="True" IsHitTestVisible="False" HorizontalOffset="12">
-            <Border Width="430" CornerRadius="18"
-                    BorderBrush="#33E7E5DF" BorderThickness="1">
+            <Border Width="430" CornerRadius="{StaticResource SurfaceCornerRadius}"
+                    BorderBrush="#33E7E5DF" BorderThickness="1"
+                    SizeChanged="OnRoundedClipSizeChanged">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                         <GradientStop Color="#FF141516" Offset="0" />
@@ -602,15 +613,15 @@
                     <DropShadowEffect BlurRadius="42" ShadowDepth="16"
                                       Direction="270" Opacity="0.62" />
                 </Border.Effect>
-                <Grid>
+                <Grid x:Name="CardPopupSurface">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="126" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border CornerRadius="18,0,0,18"
+                    <Border CornerRadius="16,0,0,16"
                             Background="{StaticResource SurfaceBrush}">
                         <Grid>
-                            <Border Margin="1" CornerRadius="17,0,0,17">
+                            <Border Margin="1" CornerRadius="15,0,0,15">
                                 <Border.Background>
                                     <ImageBrush ImageSource="{Binding Poster}" Stretch="UniformToFill" />
                                 </Border.Background>
