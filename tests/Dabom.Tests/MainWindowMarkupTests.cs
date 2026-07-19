@@ -14,6 +14,46 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void AppIcon_IsMultiResolutionAndUsedEverywhere()
+    {
+        var projectDirectory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "src", "Dabom"));
+        var project = File.ReadAllText(Path.Combine(projectDirectory, "Dabom.csproj"));
+        var mainWindow = File.ReadAllText(Path.Combine(projectDirectory, "MainWindow.xaml"));
+        var metadataWindow = File.ReadAllText(Path.Combine(projectDirectory, "MetadataWindow.xaml"));
+        var iconPath = Path.Combine(projectDirectory, "Assets", "Dabom.ico");
+
+        StringAssert.Contains(project, "<ApplicationIcon>Assets\\Dabom.ico</ApplicationIcon>");
+        StringAssert.Contains(project, "<Resource Include=\"Assets\\Dabom.ico\" />");
+        StringAssert.Contains(mainWindow, "Icon=\"Assets/Dabom.ico\"");
+        StringAssert.Contains(metadataWindow, "Icon=\"Assets/Dabom.ico\"");
+        Assert.IsTrue(File.Exists(iconPath), "다중 해상도 ICO가 생성되어야 합니다.");
+
+        var bytes = File.ReadAllBytes(iconPath);
+        Assert.IsTrue(bytes.Length >= 6, "ICO 헤더가 필요합니다.");
+        Assert.AreEqual((ushort)0, BitConverter.ToUInt16(bytes, 0));
+        Assert.AreEqual((ushort)1, BitConverter.ToUInt16(bytes, 2));
+
+        var expectedSizes = new[] { 16, 20, 24, 32, 40, 48, 64, 96, 128, 256 };
+        var frameCount = BitConverter.ToUInt16(bytes, 4);
+        Assert.AreEqual(expectedSizes.Length, frameCount);
+        Assert.IsTrue(bytes.Length >= 6 + frameCount * 16, "ICO 디렉터리가 완전해야 합니다.");
+
+        var actualSizes = new int[frameCount];
+        for (var index = 0; index < frameCount; index++)
+        {
+            var entryOffset = 6 + index * 16;
+            actualSizes[index] = bytes[entryOffset] == 0 ? 256 : bytes[entryOffset];
+            var height = bytes[entryOffset + 1] == 0 ? 256 : bytes[entryOffset + 1];
+            Assert.AreEqual(actualSizes[index], height);
+        }
+
+        CollectionAssert.AreEquivalent(expectedSizes, actualSizes);
+    }
+
+    [TestMethod]
     public void RoundedElements_UseSharedCornerRadiusScale()
     {
         var markup = ReadMainWindowMarkup();
