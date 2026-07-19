@@ -20,6 +20,9 @@ public sealed class VideoItemViewModel : ViewModelBase
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);
     public string OriginalTitle => _record.OriginalTitle ?? string.Empty;
     public string ReleaseYear => _record.ReleaseDate?.Year.ToString() ?? "—";
+    public string ReleaseDateText => _record.ReleaseDate is { } date
+        ? $"{date.Year}년 {date.Month}월 {date.Day}일"
+        : "—";
     public string Director => _record.Director ?? "—";
     public string ActorsText => _record.Actors.Length == 0 ? "—" : string.Join(", ", _record.Actors);
     public string DurationText => LibraryRules.DurationText(_record.DurationTicks);

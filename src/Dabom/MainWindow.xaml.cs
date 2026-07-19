@@ -2,6 +2,7 @@ using Dabom.Main;
 using Dabom.Metadata;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -146,6 +147,13 @@ public partial class MainWindow : Window
         }
 
         CardPopup.PlacementTarget = activeCard;
+        if (_hoveredCard is null)
+        {
+            CardPopup.Placement = PlacementMode.Right;
+            CardPopup.PlacementRectangle = Rect.Empty;
+            CardPopup.HorizontalOffset = 12;
+            CardPopup.VerticalOffset = 0;
+        }
         CardPopup.DataContext = activeCard.DataContext;
         CardPopup.IsOpen = true;
         MakeCardPopupClickThrough();
@@ -163,8 +171,27 @@ public partial class MainWindow : Window
 
     private void OnCardEnter(object sender, MouseEventArgs e)
     {
-        _hoveredCard = (ListBoxItem)sender;
+        var card = (ListBoxItem)sender;
+        _hoveredCard = card;
+        UpdateCardPopupPointerPlacement(card, e);
         RefreshCardPopup();
+    }
+
+    private void OnCardMove(object sender, MouseEventArgs e)
+    {
+        if (ReferenceEquals(_hoveredCard, sender))
+        {
+            UpdateCardPopupPointerPlacement((ListBoxItem)sender, e);
+        }
+    }
+
+    private void UpdateCardPopupPointerPlacement(ListBoxItem card, MouseEventArgs e)
+    {
+        var position = e.GetPosition(card);
+        CardPopup.Placement = PlacementMode.RelativePoint;
+        CardPopup.PlacementRectangle = new Rect(position.X + 24, position.Y - 76, 0, 0);
+        CardPopup.HorizontalOffset = 0;
+        CardPopup.VerticalOffset = 0;
     }
 
     private void OnCardFocus(object sender, KeyboardFocusChangedEventArgs e)

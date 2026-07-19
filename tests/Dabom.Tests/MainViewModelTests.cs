@@ -109,6 +109,25 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void VideoItem_FormatsFullKoreanReleaseDateForReferenceTooltip()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-release-date-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { ReleaseDate = new DateOnly(2024, 2, 28) },
+                new LibraryStore(root.FullName));
+
+            Assert.AreEqual("2024년 2월 28일", item.ReleaseDateText);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task ScanAsync_DefaultsToTitleAscending()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
