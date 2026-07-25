@@ -25,6 +25,7 @@ public sealed class VideoItemViewModel : ViewModelBase
         : "—";
     public string Director => _record.Director ?? "—";
     public string ActorsText => _record.Actors.Length == 0 ? "—" : string.Join(", ", _record.Actors);
+    public string GenresText => _record.Genres.Length == 0 ? "—" : string.Join(", ", _record.Genres);
     public string DurationText => LibraryRules.DurationText(_record.DurationTicks);
     public string FileSizeText => $"{_record.FileSizeBytes / 1024d / 1024d:N1} MB";
     public BitmapSource? Poster => _poster;

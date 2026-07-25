@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <Resource Include="Assets\Dabom.ico" />
+    <Resource Include="Assets\TmdbLogo.png" />
   </ItemGroup>
 
 </Project>

@@ -59,6 +59,9 @@ public partial class MainWindow : Window
         WarningsPopup.IsOpen = !WarningsPopup.IsOpen;
     }
 
+    private void OnAbout(object sender, RoutedEventArgs e) =>
+        new AboutWindow { Owner = this }.ShowDialog();
+
     private async void OnAddLocation(object sender, RoutedEventArgs e)
     {
         var viewModel = (MainViewModel)DataContext;

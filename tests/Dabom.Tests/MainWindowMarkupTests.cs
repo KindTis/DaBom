@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Media.Imaging;
 
 namespace Dabom.Tests;
 
@@ -193,6 +194,74 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void MainWindow_OffersAccessibleAboutButtonNextToTitle()
+    {
+        var markup = ReadMainWindowMarkup();
+        var title = markup.IndexOf("Text=\"DABOM\"", StringComparison.Ordinal);
+        var about = markup.IndexOf(
+            "Content=\"ABOUT\"", title, StringComparison.Ordinal);
+
+        Assert.IsTrue(title >= 0 && about > title);
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"DABOM 정보\"");
+        StringAssert.Contains(markup, "Click=\"OnAbout\"");
+    }
+
+    [TestMethod]
+    public void CardPopup_ShowsGenresAndScanningStatus()
+    {
+        var markup = ReadMainWindowMarkup();
+
+        StringAssert.Contains(markup, "Text=\"장르\"");
+        StringAssert.Contains(markup, "Text=\"{Binding GenresText}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding StatusMessage}\"");
+        Assert.IsFalse(markup.Contains(
+            "<DataTrigger Binding=\"{Binding IsScanning}\" Value=\"True\">",
+            StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void AboutWindow_ContainsRequiredTmdbAttributionAndKeyboardClose()
+    {
+        var markup = ReadAboutWindowMarkup();
+        var code = ReadAboutWindowCode();
+
+        StringAssert.Contains(markup, "Text=\"DABOM\"");
+        StringAssert.Contains(
+            markup,
+            "지정한 보관 위치의 영화, 드라마, 애니메이션을 찾아 메타데이터와 포스터를 함께 관리하는 Windows 데스크톱 앱입니다.");
+        StringAssert.Contains(
+            markup,
+            "This product uses the TMDB API but is not endorsed or certified by TMDB.");
+        StringAssert.Contains(markup, "NavigateUri=\"https://www.themoviedb.org/\"");
+        StringAssert.Contains(markup, "IsCancel=\"True\"");
+        StringAssert.Contains(markup, "Content=\"닫기\"");
+        StringAssert.Contains(
+            code,
+            "Assembly.GetExecutingAssembly().GetName().Version");
+    }
+
+    [TestMethod]
+    public void AboutWindow_UsesSmallValidTmdbPng()
+    {
+        var projectDirectory = ProjectDirectory();
+        var logoPath = Path.Combine(
+            projectDirectory, "Assets", "TmdbLogo.png");
+
+        Assert.IsTrue(File.Exists(logoPath), "공식 TMDB PNG가 필요합니다.");
+        using var stream = File.OpenRead(logoPath);
+        var decoder = new PngBitmapDecoder(
+            stream,
+            BitmapCreateOptions.PreservePixelFormat,
+            BitmapCacheOption.OnLoad);
+
+        Assert.AreEqual(1, decoder.Frames.Count);
+        StringAssert.Contains(
+            ReadAboutWindowMarkup(),
+            "Source=\"Assets/TmdbLogo.png\" Width=\"96\" Height=\"36\"");
+        Assert.IsTrue(96 < 256 && 36 < 256, "로고 표시 크기는 앱 아이콘보다 작아야 합니다.");
+    }
+
+    [TestMethod]
     public void CardPopup_FollowsPointerAndKeepsKeyboardPlacement()
     {
         var markup = ReadMainWindowMarkup();
@@ -224,12 +293,15 @@ public sealed class MainWindowMarkupTests
 
     private static string ReadMainWindowMarkup()
     {
-        var path = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..",
-            "src", "Dabom", "MainWindow.xaml"));
+        var path = Path.Combine(ProjectDirectory(), "MainWindow.xaml");
         return File.ReadAllText(path);
     }
+
+    private static string ReadAboutWindowMarkup() =>
+        File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml"));
+
+    private static string ReadAboutWindowCode() =>
+        File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml.cs"));
 
     private static string ReadThemeMarkup()
     {
@@ -242,10 +314,12 @@ public sealed class MainWindowMarkupTests
 
     private static string ReadMainWindowCode()
     {
-        var path = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "..",
-            "src", "Dabom", "MainWindow.xaml.cs"));
+        var path = Path.Combine(ProjectDirectory(), "MainWindow.xaml.cs");
         return File.ReadAllText(path);
     }
+
+    private static string ProjectDirectory() => Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory,
+        "..", "..", "..", "..", "..",
+        "src", "Dabom"));
 }
