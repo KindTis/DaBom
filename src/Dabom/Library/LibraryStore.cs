@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Dabom.Library;
 
@@ -8,7 +9,8 @@ public sealed class LibraryStore
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() }
     };
 
     private static readonly HashSet<string> PosterExtensions = new(
@@ -217,9 +219,41 @@ public sealed class LibraryStore
         var videos = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in data.VideosByPath)
         {
-            videos[Path.GetFullPath(pair.Key)] = pair.Value with { Actors = pair.Value.Actors ?? [] };
+            var path = Path.GetFullPath(pair.Key);
+            videos[path] = NormalizeRecord(path, pair.Value);
         }
 
         return data with { Locations = locations, VideosByPath = videos };
+    }
+
+    private static VideoRecord NormalizeRecord(string path, VideoRecord record)
+    {
+        var status = record.MetadataStatus;
+        if (status == MetadataStatus.Unspecified)
+        {
+            var fileTitle = Path.GetFileNameWithoutExtension(path);
+            var hasManualValue =
+                !string.IsNullOrWhiteSpace(record.OriginalTitle)
+                || record.ReleaseDate is not null
+                || !string.IsNullOrWhiteSpace(record.Director)
+                || record.Actors is { Length: > 0 }
+                || !string.IsNullOrWhiteSpace(record.Synopsis)
+                || !string.IsNullOrWhiteSpace(record.Poster)
+                || (!string.IsNullOrWhiteSpace(record.Title)
+                    && !record.Title.Trim().Equals(
+                        fileTitle, StringComparison.Ordinal));
+            status = hasManualValue
+                ? MetadataStatus.Manual
+                : MetadataStatus.Pending;
+        }
+
+        return record with
+        {
+            Actors = record.Actors ?? [],
+            Genres = record.Genres ?? [],
+            ProviderReferences = record.ProviderReferences ?? [],
+            UserEditedFields = record.UserEditedFields ?? [],
+            MetadataStatus = status
+        };
     }
 }

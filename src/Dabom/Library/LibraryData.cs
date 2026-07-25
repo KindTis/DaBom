@@ -1,5 +1,44 @@
 namespace Dabom.Library;
 
+public enum MediaType
+{
+    Unknown,
+    Movie,
+    TvEpisode
+}
+
+public enum MetadataStatus
+{
+    Unspecified = 0,
+    Pending,
+    Matched,
+    NotFound,
+    Failed,
+    Manual
+}
+
+public enum MetadataField
+{
+    Title,
+    OriginalTitle,
+    SeriesTitle,
+    EpisodeTitle,
+    ReleaseDate,
+    Genres,
+    Director,
+    Actors,
+    Synopsis,
+    Poster,
+    MediaType,
+    SeasonNumber,
+    EpisodeNumber
+}
+
+public sealed record ProviderReference(
+    string ProviderKey,
+    string ResourceType,
+    string ResourceId);
+
 public sealed record LibraryData
 {
     public string[] Locations { get; init; } = [];
@@ -16,6 +55,15 @@ public sealed record VideoRecord
     public string[] Actors { get; init; } = [];
     public string? Synopsis { get; init; }
     public string? Poster { get; init; }
+    public MediaType MediaType { get; init; }
+    public string? SeriesTitle { get; init; }
+    public string? EpisodeTitle { get; init; }
+    public int? SeasonNumber { get; init; }
+    public int? EpisodeNumber { get; init; }
+    public string[] Genres { get; init; } = [];
+    public MetadataStatus MetadataStatus { get; init; }
+    public ProviderReference[] ProviderReferences { get; init; } = [];
+    public HashSet<MetadataField> UserEditedFields { get; init; } = [];
     public long FileSizeBytes { get; init; }
     public DateTimeOffset LastWriteTimeUtc { get; init; }
     public long? DurationTicks { get; init; }

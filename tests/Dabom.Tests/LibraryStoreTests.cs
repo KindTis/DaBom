@@ -30,6 +30,19 @@ public sealed class LibraryStoreTests
                         Actors = ["배우"],
                         Synopsis = "줄거리",
                         Poster = "posters/poster.jpg",
+                        MediaType = MediaType.TvEpisode,
+                        SeriesTitle = "도깨비",
+                        EpisodeTitle = "검의 주인",
+                        SeasonNumber = 1,
+                        EpisodeNumber = 4,
+                        Genres = ["드라마", "판타지"],
+                        MetadataStatus = MetadataStatus.Matched,
+                        ProviderReferences =
+                        [
+                            new("tmdb", "tv-series", "67915"),
+                            new("tmdb", "tv-episode", "123456")
+                        ],
+                        UserEditedFields = [MetadataField.Synopsis, MetadataField.Poster],
                         FileSizeBytes = 10,
                         LastWriteTimeUtc = DateTimeOffset.Parse("2026-07-18T09:00:00Z"),
                         DurationTicks = 20,
@@ -51,11 +64,87 @@ public sealed class LibraryStoreTests
             CollectionAssert.AreEqual(expectedVideo.Actors, actualVideo.Actors);
             Assert.AreEqual(expectedVideo.Synopsis, actualVideo.Synopsis);
             Assert.AreEqual(expectedVideo.Poster, actualVideo.Poster);
+            Assert.AreEqual(expectedVideo.MediaType, actualVideo.MediaType);
+            Assert.AreEqual(expectedVideo.SeriesTitle, actualVideo.SeriesTitle);
+            Assert.AreEqual(expectedVideo.EpisodeTitle, actualVideo.EpisodeTitle);
+            Assert.AreEqual(expectedVideo.SeasonNumber, actualVideo.SeasonNumber);
+            Assert.AreEqual(expectedVideo.EpisodeNumber, actualVideo.EpisodeNumber);
+            CollectionAssert.AreEqual(expectedVideo.Genres, actualVideo.Genres);
+            Assert.AreEqual(expectedVideo.MetadataStatus, actualVideo.MetadataStatus);
+            CollectionAssert.AreEqual(
+                expectedVideo.ProviderReferences, actualVideo.ProviderReferences);
+            CollectionAssert.AreEquivalent(
+                expectedVideo.UserEditedFields.ToArray(),
+                actualVideo.UserEditedFields.ToArray());
             Assert.AreEqual(expectedVideo.FileSizeBytes, actualVideo.FileSizeBytes);
             Assert.AreEqual(expectedVideo.LastWriteTimeUtc, actualVideo.LastWriteTimeUtc);
             Assert.AreEqual(expectedVideo.DurationTicks, actualVideo.DurationTicks);
             Assert.AreEqual(expectedVideo.LastPlayedUtc, actualVideo.LastPlayedUtc);
             Assert.IsTrue(actual.VideosByPath.Comparer.Equals(StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_MigratesLegacyManualAndUntouchedRecords()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-metadata-migration-");
+        try
+        {
+            var manualPath = Path.Combine(root.FullName, "Manual.mkv");
+            var pendingPath = Path.Combine(root.FullName, "Pending.mkv");
+            var json = $$"""
+            {
+              "locations": ["{{root.FullName.Replace("\\", "\\\\")}}"],
+              "videosByPath": {
+                "{{manualPath.Replace("\\", "\\\\")}}": { "title": "직접 고친 제목", "actors": [] },
+                "{{pendingPath.Replace("\\", "\\\\")}}": { "title": "Pending", "actors": [] }
+              }
+            }
+            """;
+            await File.WriteAllTextAsync(Path.Combine(root.FullName, "library.json"), json);
+
+            var actual = await new LibraryStore(root.FullName).LoadAsync(
+                CancellationToken.None);
+
+            Assert.AreEqual(
+                MetadataStatus.Manual,
+                actual.VideosByPath[manualPath].MetadataStatus);
+            Assert.AreEqual(
+                MetadataStatus.Pending,
+                actual.VideosByPath[pendingPath].MetadataStatus);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_NormalizesMissingMetadataCollections()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-metadata-null-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            await File.WriteAllTextAsync(
+                Path.Combine(root.FullName, "library.json"),
+                $$$"""
+                {"locations":[],"videosByPath":{
+                  "{{{path.Replace("\\", "\\\\")}}}":{"actors":[]}
+                }}
+                """);
+
+            var record = (await new LibraryStore(root.FullName).LoadAsync(
+                CancellationToken.None)).VideosByPath[path];
+
+            Assert.IsNotNull(record.Genres);
+            Assert.IsNotNull(record.ProviderReferences);
+            Assert.IsNotNull(record.UserEditedFields);
+            Assert.AreNotEqual(MetadataStatus.Unspecified, record.MetadataStatus);
         }
         finally
         {
