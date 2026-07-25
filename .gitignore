@@ -19,4 +19,5 @@ AGENTS.md
 /docs/
 graphify-out
 reference-design
+.vs
 .env
