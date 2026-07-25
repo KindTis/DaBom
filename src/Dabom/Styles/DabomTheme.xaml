@@ -296,6 +296,19 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <Style.Triggers>
+            <Trigger Property="ResizeMode" Value="NoResize">
+                <Setter Property="shell:WindowChrome.WindowChrome">
+                    <Setter.Value>
+                        <shell:WindowChrome CaptionHeight="40"
+                                            ResizeBorderThickness="0"
+                                            GlassFrameThickness="0"
+                                            CornerRadius="0"
+                                            UseAeroCaptionButtons="False" />
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
     </Style>
     <Style TargetType="Button">
         <Setter Property="Cursor" Value="Hand" />

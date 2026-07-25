@@ -154,9 +154,19 @@ public sealed class WindowChromeMarkupTests
             ShowActivated = false,
             ShowInTaskbar = false
         };
+        var noResizeWindow = new Window
+        {
+            Style = (Style)theme[typeof(Window)],
+            ResizeMode = ResizeMode.NoResize,
+            Width = 560,
+            Height = 520,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
 
         legacyWindow.Show();
         window.Show();
+        noResizeWindow.Show();
         try
         {
             window.Dispatcher.Invoke(
@@ -206,9 +216,22 @@ public sealed class WindowChromeMarkupTests
                 legacyContent.ActualWidth,
                 customContent.ActualWidth,
                 0.5);
+            Assert.IsFalse(
+                IsResizeHit(SendHitTest(
+                    noResizeWindow,
+                    noResizeWindow.PointToScreen(
+                        new Point(noResizeWindow.ActualWidth / 2, 1)))));
+            Assert.IsFalse(
+                IsResizeHit(SendHitTest(
+                    noResizeWindow,
+                    noResizeWindow.PointToScreen(
+                        new Point(
+                            noResizeWindow.ActualWidth - 1,
+                            noResizeWindow.ActualHeight / 2)))));
         }
         finally
         {
+            noResizeWindow.Close();
             window.Close();
             legacyWindow.Close();
         }
@@ -239,6 +262,9 @@ public sealed class WindowChromeMarkupTests
         var y = (int)Math.Round(point.Y);
         return new IntPtr(unchecked((y << 16) | (x & 0xffff)));
     }
+
+    private static bool IsResizeHit(IntPtr hit) =>
+        hit.ToInt32() is >= 10 and <= 17;
 
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(
