@@ -1,0 +1,485 @@
+using Dabom.Library;
+using System.Net.Http;
+
+namespace Dabom.Metadata;
+
+public sealed record MetadataProgress(
+    string Path,
+    int Completed,
+    int Total,
+    int Matched,
+    int NotFound,
+    int Failed);
+
+public sealed record MetadataRunSummary(
+    int Matched,
+    int NotFound,
+    int Failed,
+    bool AuthenticationFailed);
+
+public sealed class MetadataEnrichmentService
+{
+    private static readonly TimeSpan DefaultItemBudget = TimeSpan.FromSeconds(10);
+    private readonly MediaFilenameParser _parser;
+    private readonly IReadOnlyList<IMetadataProvider> _providers;
+    private readonly LibraryStore _store;
+    private readonly HttpClient _imageClient;
+    private readonly TimeSpan _itemBudget;
+    private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+
+    public MetadataEnrichmentService(
+        MediaFilenameParser parser,
+        IReadOnlyList<IMetadataProvider> providers,
+        LibraryStore store,
+        HttpClient imageClient)
+        : this(
+            parser,
+            providers,
+            store,
+            imageClient,
+            DefaultItemBudget,
+            () => DateTimeOffset.UtcNow,
+            Task.Delay)
+    {
+    }
+
+    internal MetadataEnrichmentService(
+        MediaFilenameParser parser,
+        IReadOnlyList<IMetadataProvider> providers,
+        LibraryStore store,
+        HttpClient imageClient,
+        TimeSpan itemBudget,
+        Func<DateTimeOffset> utcNow,
+        Func<TimeSpan, CancellationToken, Task> delay)
+    {
+        _parser = parser;
+        _providers = providers;
+        _store = store;
+        _imageClient = imageClient;
+        _itemBudget = itemBudget;
+        _utcNow = utcNow;
+        _delay = delay;
+    }
+
+    public async Task<MetadataRunSummary> EnrichAsync(
+        IReadOnlyDictionary<string, VideoRecord> records,
+        IReadOnlyCollection<string> currentPaths,
+        Func<string, VideoRecord, string?, CancellationToken, Task> commitAsync,
+        Action<MetadataProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var targets = currentPaths
+            .Where(path => records.TryGetValue(path, out var record)
+                && record.MetadataStatus is MetadataStatus.Pending
+                    or MetadataStatus.Failed)
+            .ToArray();
+        var unavailableUntil =
+            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var matched = 0;
+        var notFound = 0;
+        var failed = 0;
+        var authenticationFailed = false;
+        var completed = 0;
+
+        foreach (var path in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = records[path];
+            var query = _parser.Parse(path);
+            VideoRecord updated;
+            string? createdPoster = null;
+
+            if (query is null)
+            {
+                updated = current with
+                {
+                    MetadataStatus = MetadataStatus.NotFound
+                };
+            }
+            else
+            {
+                var deadline = _utcNow() + _itemBudget;
+                using var budget = new CancellationTokenSource(_itemBudget);
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    budget.Token);
+                MetadataDetails? selected = null;
+                var hadProviderError = false;
+
+                foreach (var provider in _providers)
+                {
+                    if (unavailableUntil.TryGetValue(
+                            provider.ProviderKey,
+                            out var until)
+                        && until > _utcNow())
+                    {
+                        hadProviderError = true;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var candidates = await ExecuteProviderCallAsync(
+                            provider,
+                            token => provider.SearchAsync(query, token),
+                            deadline,
+                            unavailableUntil,
+                            linked.Token,
+                            cancellationToken);
+                        if (candidates.Count == 0) continue;
+                        var candidate = candidates[0];
+                        if (candidate.MediaType != query.MediaType)
+                        {
+                            hadProviderError = true;
+                            continue;
+                        }
+
+                        var details = await ExecuteProviderCallAsync(
+                            provider,
+                            token => provider.GetDetailsAsync(candidate, token),
+                            deadline,
+                            unavailableUntil,
+                            linked.Token,
+                            cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (!IsComplete(provider, query.MediaType, details))
+                        {
+                            hadProviderError = true;
+                            continue;
+                        }
+
+                        if (details.OptionalIssue is { } issue)
+                        {
+                            authenticationFailed |=
+                                issue.Kind
+                                == MetadataProviderFailureKind.Authentication;
+                            if (issue.RetryAfter is { } retryAfter)
+                            {
+                                unavailableUntil[provider.ProviderKey] =
+                                    _utcNow() + retryAfter;
+                            }
+                        }
+
+                        selected = details;
+                        break;
+                    }
+                    catch (MetadataProviderException error)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        hadProviderError = true;
+                        authenticationFailed |=
+                            error.Kind
+                            == MetadataProviderFailureKind.Authentication;
+                        if (error.RetryAfter is { } retryAfter)
+                        {
+                            unavailableUntil[provider.ProviderKey] =
+                                _utcNow() + retryAfter;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                        when (budget.IsCancellationRequested
+                            && !cancellationToken.IsCancellationRequested)
+                    {
+                        hadProviderError = true;
+                        break;
+                    }
+                }
+
+                if (selected is null)
+                {
+                    updated = current with
+                    {
+                        MetadataStatus = hadProviderError
+                            ? MetadataStatus.Failed
+                            : MetadataStatus.NotFound
+                    };
+                }
+                else
+                {
+                    (updated, createdPoster) = await ApplyDetailsAsync(
+                        current,
+                        selected,
+                        linked.Token,
+                        cancellationToken);
+                }
+            }
+
+            try
+            {
+                await commitAsync(
+                    path,
+                    updated,
+                    createdPoster,
+                    cancellationToken);
+                switch (updated.MetadataStatus)
+                {
+                    case MetadataStatus.Matched:
+                        matched++;
+                        break;
+                    case MetadataStatus.NotFound:
+                        notFound++;
+                        break;
+                    default:
+                        failed++;
+                        break;
+                }
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                failed++;
+            }
+
+            completed++;
+            progress?.Invoke(new(
+                path,
+                completed,
+                targets.Length,
+                matched,
+                notFound,
+                failed));
+        }
+
+        return new(matched, notFound, failed, authenticationFailed);
+    }
+
+    private async Task<T> ExecuteProviderCallAsync<T>(
+        IMetadataProvider provider,
+        Func<CancellationToken, Task<T>> call,
+        DateTimeOffset deadline,
+        IDictionary<string, DateTimeOffset> unavailableUntil,
+        CancellationToken linkedToken,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await call(linkedToken);
+            }
+            catch (OperationCanceledException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw;
+            }
+            catch (MetadataProviderException error)
+            {
+                if (error.RetryAfter is { } retryAfter)
+                {
+                    unavailableUntil[provider.ProviderKey] =
+                        _utcNow() + retryAfter;
+                }
+
+                if (error.Kind != MetadataProviderFailureKind.Transient
+                    || attempt >= 2)
+                {
+                    throw;
+                }
+
+                var wait = error.RetryAfter
+                    ?? TimeSpan.FromMilliseconds(attempt == 0 ? 250 : 500);
+                if (wait >= deadline - _utcNow())
+                {
+                    throw;
+                }
+
+                try
+                {
+                    await _delay(wait, linkedToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw;
+                }
+            }
+        }
+    }
+
+    private async Task<(VideoRecord Record, string? CreatedPoster)>
+        ApplyDetailsAsync(
+            VideoRecord current,
+            MetadataDetails details,
+            CancellationToken linkedToken,
+            CancellationToken cancellationToken)
+    {
+        var mediaType = Keep(
+            current,
+            MetadataField.MediaType,
+            current.MediaType,
+            details.MediaType);
+        var seriesTitle = Keep(
+            current,
+            MetadataField.SeriesTitle,
+            current.SeriesTitle,
+            details.SeriesTitle);
+        var episodeTitle = Keep(
+            current,
+            MetadataField.EpisodeTitle,
+            current.EpisodeTitle,
+            details.EpisodeTitle);
+        var seasonNumber = Keep(
+            current,
+            MetadataField.SeasonNumber,
+            current.SeasonNumber,
+            details.SeasonNumber);
+        var episodeNumber = Keep(
+            current,
+            MetadataField.EpisodeNumber,
+            current.EpisodeNumber,
+            details.EpisodeNumber);
+        var fetchedTitle = mediaType == MediaType.TvEpisode
+            ? BuildEpisodeTitle(
+                seriesTitle,
+                episodeTitle,
+                seasonNumber,
+                episodeNumber)
+            : details.Title;
+        var updated = current with
+        {
+            Title = Keep(
+                current,
+                MetadataField.Title,
+                current.Title,
+                fetchedTitle),
+            OriginalTitle = Keep(
+                current,
+                MetadataField.OriginalTitle,
+                current.OriginalTitle,
+                details.OriginalTitle),
+            SeriesTitle = seriesTitle,
+            EpisodeTitle = episodeTitle,
+            ReleaseDate = Keep(
+                current,
+                MetadataField.ReleaseDate,
+                current.ReleaseDate,
+                details.ReleaseDate),
+            Genres = Keep(
+                current,
+                MetadataField.Genres,
+                current.Genres,
+                details.Genres),
+            Director = Keep(
+                current,
+                MetadataField.Director,
+                current.Director,
+                details.Director),
+            Actors = Keep(
+                current,
+                MetadataField.Actors,
+                current.Actors,
+                details.Actors),
+            Synopsis = Keep(
+                current,
+                MetadataField.Synopsis,
+                current.Synopsis,
+                details.Synopsis),
+            MediaType = mediaType,
+            SeasonNumber = seasonNumber,
+            EpisodeNumber = episodeNumber,
+            ProviderReferences = details.ProviderReferences
+        };
+
+        string? createdPoster = null;
+        var poster = current.Poster;
+        var posterProtected =
+            current.UserEditedFields.Contains(MetadataField.Poster);
+        var posterFailed = !posterProtected && details.PosterFailed;
+        if (!posterProtected && !posterFailed)
+        {
+            if (details.PosterUri is null)
+            {
+                poster = null;
+            }
+            else
+            {
+                try
+                {
+                    linkedToken.ThrowIfCancellationRequested();
+                    createdPoster = await _store.DownloadPosterAsync(
+                        _imageClient,
+                        details.PosterUri,
+                        linkedToken);
+                    poster = createdPoster;
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    posterFailed = true;
+                    poster = current.Poster;
+                }
+            }
+        }
+
+        return (updated with
+        {
+            Poster = poster,
+            MetadataStatus = posterFailed
+                ? MetadataStatus.Failed
+                : MetadataStatus.Matched
+        }, createdPoster);
+    }
+
+    private static bool IsComplete(
+        IMetadataProvider provider,
+        MediaType expectedType,
+        MetadataDetails details)
+    {
+        if (details.MediaType != expectedType) return false;
+
+        var expectedReferences = expectedType switch
+        {
+            MediaType.Movie => 1,
+            MediaType.TvEpisode => 2,
+            _ => 0
+        };
+        var ownsRequiredReferences =
+            details.ProviderReferences.Length == expectedReferences
+            && details.ProviderReferences.All(reference =>
+                string.Equals(
+                    reference.ProviderKey,
+                    provider.ProviderKey,
+                    StringComparison.Ordinal));
+
+        return ownsRequiredReferences
+            && (expectedType switch
+            {
+                MediaType.Movie => !string.IsNullOrWhiteSpace(details.Title),
+                MediaType.TvEpisode =>
+                    !string.IsNullOrWhiteSpace(details.SeriesTitle)
+                    && details.SeasonNumber is not null
+                    && details.EpisodeNumber is not null,
+                _ => false
+            });
+    }
+
+    private static T Keep<T>(
+        VideoRecord current,
+        MetadataField field,
+        T currentValue,
+        T fetchedValue) =>
+        current.UserEditedFields.Contains(field)
+            ? currentValue
+            : fetchedValue;
+
+    private static string BuildEpisodeTitle(
+        string? seriesTitle,
+        string? episodeTitle,
+        int? seasonNumber,
+        int? episodeNumber)
+    {
+        var title = $"{seriesTitle} S{seasonNumber:00}E{episodeNumber:00}";
+        return string.IsNullOrWhiteSpace(episodeTitle)
+            ? title
+            : $"{title} · {episodeTitle}";
+    }
+}
