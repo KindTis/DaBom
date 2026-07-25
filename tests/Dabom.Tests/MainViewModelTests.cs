@@ -2,6 +2,7 @@ using Dabom.Library;
 using Dabom.Main;
 using Dabom.Metadata;
 using System.IO;
+using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -293,6 +294,359 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task ScanAsync_CreatesPendingRecordWithFileNameTitle()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-pending-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "New.Movie.2024.mkv");
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(path),
+                new LibraryData { Locations = [root.FullName] });
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(
+                Path.GetFileNameWithoutExtension(path),
+                vm.Videos.Single().Record.Title);
+            Assert.AreEqual(
+                MetadataStatus.Pending,
+                vm.Videos.Single().Record.MetadataStatus);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void ScanAsync_AfterScanEnrichesPendingAndFailedRecordsSequentially()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-scan-enrich-");
+            try
+            {
+                var first = Path.Combine(root.FullName, "First.Movie.mkv");
+                var second = Path.Combine(root.FullName, "Second.Movie.mkv");
+                var data = CachedData(root.FullName, first);
+                data.VideosByPath[first] = data.VideosByPath[first] with
+                {
+                    Title = "First Movie",
+                    MetadataStatus = MetadataStatus.Failed
+                };
+                var queries = new List<string>();
+                var provider = new TestProvider(
+                    (query, _) =>
+                    {
+                        queries.Add(query.Title);
+                        return Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [
+                            new("test", "movie", query.Title, MediaType.Movie)
+                        ]);
+                    },
+                    (candidate, _) => Task.FromResult(
+                        MovieDetails($"적용 {candidate.ResourceId}", candidate.ResourceId)));
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(first, second),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+
+                await vm.ScanAsync();
+
+                CollectionAssert.AreEqual(
+                    new[] { "First Movie", "Second Movie" },
+                    queries);
+                Assert.IsTrue(vm.Videos.All(video =>
+                    video.Record.MetadataStatus == MetadataStatus.Matched));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_UpdatesVideoItemOnlyAfterEachMetadataSave()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-enrich-save-order-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Title = "이전 제목",
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var store = new LibraryStore(
+                root.FullName,
+                async (temporary, destination, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                    File.Move(temporary, destination);
+                });
+            var provider = TestProvider.ForMovie(
+                MovieDetails("새 제목", "1"));
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            var scan = vm.ScanAsync();
+            await started.Task;
+
+            Assert.AreEqual("이전 제목", vm.Videos.Single().Record.Title);
+            Assert.AreEqual(
+                MetadataStatus.Pending,
+                vm.Videos.Single().Record.MetadataStatus);
+
+            release.TrySetResult();
+            await scan;
+
+            Assert.AreEqual("새 제목", vm.Videos.Single().Record.Title);
+            Assert.AreEqual(
+                MetadataStatus.Matched,
+                vm.Videos.Single().Record.MetadataStatus);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenOneMetadataCommitFails_ContinuesWithNextVideo()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-enrich-save-failure-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "First.Movie.mkv");
+            var second = Path.Combine(root.FullName, "Second.Movie.mkv");
+            var data = CachedData(root.FullName, first, second);
+            data.VideosByPath[first] = data.VideosByPath[first] with
+            {
+                MetadataStatus = MetadataStatus.Pending
+            };
+            data.VideosByPath[second] = data.VideosByPath[second] with
+            {
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var commits = 0;
+            var store = new LibraryStore(
+                root.FullName,
+                (temporary, destination, _) =>
+                {
+                    commits++;
+                    if (commits == 1) throw new IOException("disk full");
+                    File.Move(temporary, destination);
+                    return Task.CompletedTask;
+                });
+            var provider = new TestProvider(
+                (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new("test", "movie", query.Title, MediaType.Movie)
+                ]),
+                (candidate, _) => Task.FromResult(
+                    MovieDetails(candidate.ResourceId, candidate.ResourceId)));
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(first, second),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(2, commits);
+            Assert.AreEqual(
+                MetadataStatus.Pending,
+                vm.Videos.Single(video => video.Path == first)
+                    .Record.MetadataStatus);
+            Assert.AreEqual(
+                MetadataStatus.Matched,
+                vm.Videos.Single(video => video.Path == second)
+                    .Record.MetadataStatus);
+            StringAssert.Contains(vm.StatusMessage, "실패 1");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_ShowsProgressAndFinalMatchedNotFoundFailedCounts()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-enrich-progress-");
+        try
+        {
+            var paths = new[]
+            {
+                Path.Combine(root.FullName, "Matched.mkv"),
+                Path.Combine(root.FullName, "NotFound.mkv"),
+                Path.Combine(root.FullName, "Failed.mkv")
+            };
+            var data = CachedData(root.FullName, paths);
+            foreach (var path in paths)
+            {
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    MetadataStatus = MetadataStatus.Pending
+                };
+            }
+            var provider = new TestProvider(
+                (query, _) => query.Title switch
+                {
+                    "Matched" => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                    [
+                        new("test", "movie", "1", MediaType.Movie)
+                    ]),
+                    "NotFound" =>
+                        Task.FromResult<IReadOnlyList<MetadataCandidate>>([]),
+                    _ => Task.FromException<IReadOnlyList<MetadataCandidate>>(
+                        new MetadataProviderException(
+                            MetadataProviderFailureKind.InvalidResponse,
+                            "bad response"))
+                },
+                (_, _) => Task.FromResult(MovieDetails("적용 제목", "1")));
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(paths),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+            var messages = new List<string>();
+            vm.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(MainViewModel.StatusMessage))
+                {
+                    messages.Add(vm.StatusMessage);
+                }
+            };
+
+            await vm.ScanAsync();
+
+            Assert.IsTrue(messages.Any(message =>
+                message.StartsWith("메타데이터 처리 ", StringComparison.Ordinal)));
+            Assert.AreEqual(
+                "메타데이터 적용 완료 · 성공 1 · 결과 없음 1 · 실패 1",
+                vm.StatusMessage);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenAuthenticationFails_PrioritizesEnvGuidance()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-enrich-auth-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var provider = new TestProvider(
+                (_, _) => Task.FromException<IReadOnlyList<MetadataCandidate>>(
+                    new MetadataProviderException(
+                        MetadataProviderFailureKind.Authentication,
+                        "unauthorized")),
+                (_, _) => throw new AssertFailedException());
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            await vm.ScanAsync();
+
+            StringAssert.Contains(vm.StatusMessage, ".env");
+            StringAssert.Contains(
+                vm.StatusMessage,
+                "DABOM_TMDB_ACCESS_TOKEN");
+            Assert.IsFalse(vm.StatusMessage.Contains(
+                "unauthorized",
+                StringComparison.Ordinal));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenEnrichedSelectedVideoLeavesFilter_ClearsSelection()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-enrich-filter-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Title = "찾는 제목",
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var provider = new TestProvider(
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new("test", "movie", "1", MediaType.Movie)
+                ]),
+                async (_, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                    return MovieDetails("다른 제목", "1");
+                });
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            var scan = vm.ScanAsync();
+            await started.Task;
+            vm.SearchText = "찾는 제목";
+            vm.SelectedVideo = vm.Videos.Single();
+            release.TrySetResult();
+            await scan;
+
+            Assert.AreEqual(0, vm.VisibleCount);
+            Assert.IsNull(vm.SelectedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task PlayAsync_WhenLaunchFails_DoesNotChangeHistory()
     {
         var root = Directory.CreateTempSubdirectory("dabom-play-launch-");
@@ -526,7 +880,7 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task MetadataSave_WhenJsonCommitFails_PreservesOldStateAndNewPosterCopy()
+    public async Task MetadataSave_WhenJsonCommitFails_PreservesOldStateAndDeletesNewPosterCopy()
     {
         var root = Directory.CreateTempSubdirectory("dabom-metadata-rollback-");
         try
@@ -568,12 +922,107 @@ public sealed class MainViewModelTests
             var reloaded = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
             Assert.AreEqual("이전 제목", reloaded.VideosByPath[path].Title);
             Assert.AreEqual("posters/old.png", reloaded.VideosByPath[path].Poster);
-            Assert.AreEqual(2, Directory.EnumerateFiles(posters.FullName).Count());
+            Assert.AreEqual(1, Directory.EnumerateFiles(posters.FullName).Count());
         }
         finally
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public void MetadataSave_AddsOnlyActuallyChangedUserEditedFields()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-edited-fields-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var references = new[]
+                {
+                    new ProviderReference("test", "movie", "1")
+                };
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "이전 제목",
+                    Synopsis = "같은 줄거리",
+                    MetadataStatus = MetadataStatus.Failed,
+                    ProviderReferences = references
+                };
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName),
+                    new StubScanner(path),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.Title = "사용자 제목";
+                editor.Synopsis =
+                    editor.OriginalRecord.Synopsis ?? string.Empty;
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                var updated = vm.Videos.Single().Record;
+                CollectionAssert.AreEquivalent(
+                    new[] { MetadataField.Title },
+                    updated.UserEditedFields.ToArray());
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_PreservesStatusAndProviderReferences()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory(
+                "dabom-metadata-lifecycle-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var references = new[]
+                {
+                    new ProviderReference("test", "movie", "1")
+                };
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "이전 제목",
+                    MetadataStatus = MetadataStatus.Failed,
+                    ProviderReferences = references
+                };
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName),
+                    new StubScanner(path),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.Title = "사용자 제목";
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                var updated = vm.Videos.Single().Record;
+                Assert.AreEqual(
+                    MetadataStatus.Failed,
+                    updated.MetadataStatus);
+                CollectionAssert.AreEqual(
+                    references,
+                    updated.ProviderReferences);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
     }
 
     [TestMethod]
@@ -624,6 +1073,12 @@ public sealed class MainViewModelTests
         ILibraryScanner scanner,
         LibraryData data) =>
         new(store, scanner, data, _ => true, () => DateTimeOffset.UtcNow, _ => 0);
+
+    private static MetadataEnrichmentService CreateEnrichment(
+        LibraryStore store,
+        HttpClient imageClient,
+        IMetadataProvider provider) =>
+        new(new MediaFilenameParser(), [provider], store, imageClient);
 
     private static LibraryData CachedData(string location, params string[] paths) => new()
     {
@@ -689,6 +1144,22 @@ public sealed class MainViewModelTests
         encoder.Save(stream);
     }
 
+    private static MetadataDetails MovieDetails(string title, string id) => new(
+        MediaType: MediaType.Movie,
+        Title: title,
+        OriginalTitle: title,
+        SeriesTitle: null,
+        EpisodeTitle: null,
+        ReleaseDate: new DateOnly(2024, 1, 1),
+        Genres: ["드라마"],
+        Director: "감독",
+        Actors: ["배우"],
+        Synopsis: "줄거리",
+        SeasonNumber: null,
+        EpisodeNumber: null,
+        PosterUri: null,
+        ProviderReferences: [new("test", "movie", id)]);
+
     private sealed class StubScanner(params string[] paths) : ILibraryScanner
     {
         public int Calls { get; private set; }
@@ -716,5 +1187,32 @@ public sealed class MainViewModelTests
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
             CancellationToken cancellationToken) =>
             Task.FromResult(_results.Dequeue());
+    }
+
+    private sealed class TestProvider(
+        Func<MetadataQuery, CancellationToken,
+            Task<IReadOnlyList<MetadataCandidate>>> search,
+        Func<MetadataCandidate, CancellationToken, Task<MetadataDetails>> details)
+        : IMetadataProvider
+    {
+        public string ProviderKey => "test";
+
+        public Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
+            MetadataQuery query,
+            CancellationToken cancellationToken) =>
+            search(query, cancellationToken);
+
+        public Task<MetadataDetails> GetDetailsAsync(
+            MetadataCandidate candidate,
+            CancellationToken cancellationToken) =>
+            details(candidate, cancellationToken);
+
+        internal static TestProvider ForMovie(MetadataDetails details) =>
+            new(
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new("test", "movie", "1", MediaType.Movie)
+                ]),
+                (_, _) => Task.FromResult(details));
     }
 }

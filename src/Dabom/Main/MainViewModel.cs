@@ -15,12 +15,21 @@ public sealed class MainViewModel : ViewModelBase
     private readonly Func<string, bool> _launch;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, int> _pickIndex;
+    private readonly MetadataEnrichmentService? _metadataEnrichment;
     private readonly ListCollectionView _visibleVideos;
     private LibraryData _data;
 
-    public MainViewModel(LibraryStore store, ILibraryScanner scanner, LibraryData data)
+    public MainViewModel(
+        LibraryStore store,
+        ILibraryScanner scanner,
+        MetadataEnrichmentService metadataEnrichment,
+        LibraryData data)
         : this(store, scanner, data, LaunchWithWindows,
-            () => DateTimeOffset.UtcNow, maximum => Random.Shared.Next(maximum)) { }
+            () => DateTimeOffset.UtcNow,
+            maximum => Random.Shared.Next(maximum),
+            metadataEnrichment)
+    {
+    }
 
     internal MainViewModel(
         LibraryStore store,
@@ -28,7 +37,8 @@ public sealed class MainViewModel : ViewModelBase
         LibraryData data,
         Func<string, bool> launch,
         Func<DateTimeOffset> utcNow,
-        Func<int, int> pickIndex)
+        Func<int, int> pickIndex,
+        MetadataEnrichmentService? metadataEnrichment = null)
     {
         _store = store;
         _scanner = scanner;
@@ -36,6 +46,7 @@ public sealed class MainViewModel : ViewModelBase
         _launch = launch;
         _utcNow = utcNow;
         _pickIndex = pickIndex;
+        _metadataEnrichment = metadataEnrichment;
         RescanCommand = new AsyncRelayCommand(ScanAsync, () => CanMutateLibrary);
         PlayCommand = new AsyncRelayCommand(
             () => SelectedVideo is null ? Task.CompletedTask : PlayAsync(SelectedVideo),
@@ -224,7 +235,11 @@ public sealed class MainViewModel : ViewModelBase
             foreach (var scanned in result.Videos.Values)
             {
                 nextRecords.TryGetValue(scanned.Path, out var old);
-                var next = (old ?? new VideoRecord()) with
+                var next = (old ?? new VideoRecord
+                {
+                    Title = Path.GetFileNameWithoutExtension(scanned.Path),
+                    MetadataStatus = MetadataStatus.Pending
+                }) with
                 {
                     FileSizeBytes = scanned.FileSizeBytes,
                     LastWriteTimeUtc = scanned.LastWriteTimeUtc,
@@ -248,9 +263,21 @@ public sealed class MainViewModel : ViewModelBase
             ReplaceWarnings(result.Warnings);
             LastScanUtc = _utcNow();
             FeaturedVideo = PickFeatured();
-            StatusMessage = result.Warnings.Count == 0
-                ? "폴더 확인을 마쳤습니다."
-                : $"폴더 확인을 마쳤습니다. 경고 {result.Warnings.Count}건";
+            var summary = _metadataEnrichment is null
+                ? new MetadataRunSummary(0, 0, 0, false)
+                : await _metadataEnrichment.EnrichAsync(
+                    _data.VideosByPath,
+                    result.Videos.Keys.ToArray(),
+                    CommitEnrichedRecordAsync,
+                    ShowMetadataProgress,
+                    CancellationToken.None);
+            StatusMessage = summary.AuthenticationFailed
+                ? $"메타데이터 실패 {summary.Failed}건. .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
+                : summary.Matched + summary.NotFound + summary.Failed == 0
+                    ? result.Warnings.Count == 0
+                        ? "폴더 확인을 마쳤습니다."
+                        : $"폴더 확인을 마쳤습니다. 경고 {result.Warnings.Count}건"
+                    : $"메타데이터 적용 완료 · 성공 {summary.Matched} · 결과 없음 {summary.NotFound} · 실패 {summary.Failed}";
         }
         catch (Exception error)
         {
@@ -412,17 +439,70 @@ public sealed class MainViewModel : ViewModelBase
                 newPoster = null;
             }
 
+            var title = NullIfWhiteSpace(editor.Title);
+            var originalTitle = NullIfWhiteSpace(editor.OriginalTitle);
+            DateOnly? releaseDate = editor.ReleaseDate is DateTime date
+                ? DateOnly.FromDateTime(date)
+                : null;
+            var director = NullIfWhiteSpace(editor.Director);
+            var actors = editor.ParsedActors();
+            var synopsis = NullIfWhiteSpace(editor.Synopsis);
+            var edited = new HashSet<MetadataField>(
+                editor.OriginalRecord.UserEditedFields);
+            if (!string.Equals(
+                editor.OriginalRecord.Title,
+                title,
+                StringComparison.Ordinal))
+            {
+                edited.Add(MetadataField.Title);
+            }
+            if (!string.Equals(
+                editor.OriginalRecord.OriginalTitle,
+                originalTitle,
+                StringComparison.Ordinal))
+            {
+                edited.Add(MetadataField.OriginalTitle);
+            }
+            if (editor.OriginalRecord.ReleaseDate != releaseDate)
+            {
+                edited.Add(MetadataField.ReleaseDate);
+            }
+            if (!string.Equals(
+                editor.OriginalRecord.Director,
+                director,
+                StringComparison.Ordinal))
+            {
+                edited.Add(MetadataField.Director);
+            }
+            if (!editor.OriginalRecord.Actors.SequenceEqual(actors))
+            {
+                edited.Add(MetadataField.Actors);
+            }
+            if (!string.Equals(
+                editor.OriginalRecord.Synopsis,
+                synopsis,
+                StringComparison.Ordinal))
+            {
+                edited.Add(MetadataField.Synopsis);
+            }
+            if (!string.Equals(
+                editor.OriginalRecord.Poster,
+                newPoster,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                edited.Add(MetadataField.Poster);
+            }
+
             var updated = editor.OriginalRecord with
             {
-                Title = NullIfWhiteSpace(editor.Title),
-                OriginalTitle = NullIfWhiteSpace(editor.OriginalTitle),
-                ReleaseDate = editor.ReleaseDate is DateTime date
-                    ? DateOnly.FromDateTime(date)
-                    : null,
-                Director = NullIfWhiteSpace(editor.Director),
-                Actors = editor.ParsedActors(),
-                Synopsis = NullIfWhiteSpace(editor.Synopsis),
-                Poster = newPoster
+                Title = title,
+                OriginalTitle = originalTitle,
+                ReleaseDate = releaseDate,
+                Director = director,
+                Actors = actors,
+                Synopsis = synopsis,
+                Poster = newPoster,
+                UserEditedFields = edited
             };
             var records = new Dictionary<string, VideoRecord>(
                 _data.VideosByPath, StringComparer.OrdinalIgnoreCase)
@@ -430,7 +510,15 @@ public sealed class MainViewModel : ViewModelBase
                 [editor.Path] = updated
             };
             var next = _data with { VideosByPath = records };
-            await _store.SaveAsync(next, cancellationToken);
+            await _store.SaveAsync(
+                next,
+                string.Equals(
+                    newPoster,
+                    editor.OriginalRecord.Poster,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : newPoster,
+                cancellationToken);
 
             _data = next;
             var video = Videos.Single(video =>
@@ -463,6 +551,53 @@ public sealed class MainViewModel : ViewModelBase
         {
             return $"메타데이터를 저장하지 못했습니다: {error.Message}";
         }
+    }
+
+    private async Task CommitEnrichedRecordAsync(
+        string path,
+        VideoRecord updated,
+        string? createdPoster,
+        CancellationToken cancellationToken)
+    {
+        var old = _data.VideosByPath[path];
+        var records = new Dictionary<string, VideoRecord>(
+            _data.VideosByPath,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            [path] = updated
+        };
+        var next = _data with { VideosByPath = records };
+        await _store.SaveAsync(next, createdPoster, cancellationToken);
+
+        _data = next;
+        var video = Videos.Single(item =>
+            item.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        video.Update(updated, _store);
+        VisibleVideos.Refresh();
+        Raise(nameof(VisibleCount));
+        if (ReferenceEquals(SelectedVideo, video)
+            && !video.Matches(SearchText))
+        {
+            SelectedVideo = null;
+        }
+
+        if (!string.Equals(
+            old.Poster,
+            updated.Poster,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            try { _store.DeletePoster(old.Poster); }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    private void ShowMetadataProgress(MetadataProgress progress)
+    {
+        StatusMessage =
+            $"메타데이터 처리 {progress.Completed}/{progress.Total} · "
+            + $"성공 {progress.Matched} · 결과 없음 {progress.NotFound} · "
+            + $"실패 {progress.Failed} · {Path.GetFileName(progress.Path)}";
     }
 
     private void ApplyCurrentVideos(IEnumerable<string> currentPaths)

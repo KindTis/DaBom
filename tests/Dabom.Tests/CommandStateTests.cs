@@ -2,7 +2,10 @@ using Dabom.Library;
 using Dabom.Main;
 using Dabom.Metadata;
 using System.IO;
+using System.Net.Http;
+using System.Runtime.ExceptionServices;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace Dabom.Tests;
 
@@ -10,42 +13,84 @@ namespace Dabom.Tests;
 public sealed class CommandStateTests
 {
     [TestMethod]
-    public async Task ScanAsync_DisablesMutatingCommandsUntilCompletion()
+    public void ScanAsync_DisablesMutatingCommandsUntilCompletion()
     {
-        var root = Directory.CreateTempSubdirectory("dabom-command-scan-");
-        try
+        RunOnDispatcher(async () =>
         {
-            var path = Path.Combine(root.FullName, "Movie.mkv");
-            var data = CachedData(root.FullName, path);
-            var scanner = new BlockingSecondScan(path);
-            var vm = CreateViewModel(new LibraryStore(root.FullName), scanner, data);
-            await vm.ScanAsync();
-            vm.SelectedVideo = vm.Videos.Single();
+            var root = Directory.CreateTempSubdirectory("dabom-command-scan-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var newPath = Path.Combine(root.FullName, "New.Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    MetadataStatus = MetadataStatus.Matched
+                };
+                var scanner = new ExpandingScanner(path, newPath);
+                var provider = new BlockingMetadataProvider();
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var enrichment = new MetadataEnrichmentService(
+                    new MediaFilenameParser(),
+                    [provider],
+                    store,
+                    imageClient);
+                var vm = new MainViewModel(
+                    store,
+                    scanner,
+                    data,
+                    _ => true,
+                    () => DateTimeOffset.UtcNow,
+                    _ => 0,
+                    enrichment);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
 
-            var scan = vm.ScanAsync();
-            await scanner.Started.Task;
+                var scan = vm.ScanAsync();
+                var startSignal = await Task.WhenAny(
+                    provider.Started.Task,
+                    Task.Delay(TimeSpan.FromSeconds(2)));
+                Assert.AreSame(
+                    provider.Started.Task,
+                    startSignal,
+                    $"조정 서비스가 시작되지 않았습니다. 스캔 {scanner.Calls}회, 검색 {provider.SearchCalls}회, 상태: {vm.StatusMessage}");
 
-            Assert.IsTrue(vm.IsScanning);
-            Assert.IsFalse(vm.RescanCommand.CanExecute(null));
-            Assert.IsFalse(vm.PlayCommand.CanExecute(null));
-            Assert.IsFalse(vm.PlayFeaturedCommand.CanExecute(null));
-            Assert.IsFalse(vm.OpenMetadataCommand.CanExecute(null));
-            Assert.IsFalse(vm.RemoveLocationCommand.CanExecute(root.FullName));
+                Assert.IsTrue(vm.IsScanning);
+                Assert.IsFalse(vm.RescanCommand.CanExecute(null));
+                Assert.IsFalse(vm.PlayCommand.CanExecute(null));
+                Assert.IsFalse(vm.PlayFeaturedCommand.CanExecute(null));
+                Assert.IsFalse(vm.OpenMetadataCommand.CanExecute(null));
+                Assert.IsFalse(vm.RemoveLocationCommand.CanExecute(root.FullName));
+                vm.SearchText = "Movie";
+                vm.SelectedSort = VideoSort.FileModified;
+                vm.SelectedVideo = vm.Videos.Single(video => video.Path == path);
+                Assert.AreEqual("Movie", vm.SearchText);
+                Assert.AreEqual(VideoSort.FileModified, vm.SelectedSort);
+                Assert.AreEqual(path, vm.SelectedVideo.Path);
 
-            scanner.Complete();
-            await scan;
+                provider.Complete();
+                var completionSignal = await Task.WhenAny(
+                    scan,
+                    Task.Delay(TimeSpan.FromSeconds(2)));
+                Assert.AreSame(
+                    scan,
+                    completionSignal,
+                    $"조정 서비스 완료 뒤 스캔이 끝나지 않았습니다. 상태: {vm.StatusMessage}");
+                await scan;
 
-            Assert.IsFalse(vm.IsScanning);
-            Assert.IsTrue(vm.RescanCommand.CanExecute(null));
-            Assert.IsTrue(vm.PlayCommand.CanExecute(null));
-            Assert.IsTrue(vm.PlayFeaturedCommand.CanExecute(null));
-            Assert.IsTrue(vm.OpenMetadataCommand.CanExecute(null));
-            Assert.IsTrue(vm.RemoveLocationCommand.CanExecute(root.FullName));
-        }
-        finally
-        {
-            root.Delete(true);
-        }
+                Assert.IsFalse(vm.IsScanning);
+                Assert.IsTrue(vm.RescanCommand.CanExecute(null));
+                Assert.IsTrue(vm.PlayCommand.CanExecute(null));
+                Assert.IsTrue(vm.PlayFeaturedCommand.CanExecute(null));
+                Assert.IsTrue(vm.OpenMetadataCommand.CanExecute(null));
+                Assert.IsTrue(vm.RemoveLocationCommand.CanExecute(root.FullName));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
     }
 
     [TestMethod]
@@ -204,6 +249,36 @@ public sealed class CommandStateTests
         Assert.IsFalse(vm.RemoveLocationCommand.CanExecute(location));
     }
 
+    private static void RunOnDispatcher(Func<Task> action)
+    {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var frame = new DispatcherFrame();
+        Exception? failure = null;
+
+        async void Run()
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+            finally
+            {
+                frame.Continue = false;
+            }
+        }
+
+        dispatcher.BeginInvoke((Action)Run);
+        Dispatcher.PushFrame(frame);
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
     private static MainViewModel CreateViewModel(
         LibraryStore store,
         ILibraryScanner scanner,
@@ -231,23 +306,68 @@ public sealed class CommandStateTests
             CancellationToken cancellationToken) => Task.FromResult(Result(paths));
     }
 
-    private sealed class BlockingSecondScan(string path) : ILibraryScanner
+    private sealed class ExpandingScanner(
+        string existingPath,
+        string newPath) : ILibraryScanner
     {
-        private readonly TaskCompletionSource<ScanResult> _completion = new();
         private int _calls;
-        public TaskCompletionSource Started { get; } = new();
+        public int Calls => _calls;
 
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
             CancellationToken cancellationToken)
         {
-            if (++_calls == 1) return Task.FromResult(Result([path]));
-            Started.TrySetResult();
-            return _completion.Task;
+            return Task.FromResult(++_calls == 1
+                ? Result([existingPath])
+                : Result([existingPath, newPath]));
+        }
+    }
+
+    private sealed class BlockingMetadataProvider : IMetadataProvider
+    {
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string ProviderKey => "test";
+        public int SearchCalls { get; private set; }
+
+        public Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
+            MetadataQuery query,
+            CancellationToken cancellationToken)
+        {
+            SearchCalls++;
+            return Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+            [
+                new("test", "movie", "1", MediaType.Movie)
+            ]);
         }
 
-        public void Complete() => _completion.SetResult(Result([path]));
+        public async Task<MetadataDetails> GetDetailsAsync(
+            MetadataCandidate candidate,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await _release.Task;
+            return new(
+                MediaType: MediaType.Movie,
+                Title: "새 영화",
+                OriginalTitle: "New Movie",
+                SeriesTitle: null,
+                EpisodeTitle: null,
+                ReleaseDate: new DateOnly(2024, 1, 1),
+                Genres: [],
+                Director: null,
+                Actors: [],
+                Synopsis: null,
+                SeasonNumber: null,
+                EpisodeNumber: null,
+                PosterUri: null,
+                ProviderReferences: [new("test", "movie", "1")]);
+        }
+
+        public void Complete() => _release.TrySetResult();
     }
 
     private static ScanResult Result(IEnumerable<string> paths)
