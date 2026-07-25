@@ -11,31 +11,23 @@ namespace Dabom.Metadata;
 
 internal static class TmdbAccessToken
 {
-    internal static string? ReadFromRepository(string startPath)
+    internal static string? ReadFromLocalApplicationData(
+        string localApplicationDataPath)
     {
-        for (DirectoryInfo? directory =
-                 new DirectoryInfo(Path.GetFullPath(startPath));
-             directory is not null;
-             directory = directory.Parent)
+        var envPath = Path.Combine(
+            Path.GetFullPath(localApplicationDataPath),
+            "Dabom",
+            ".env");
+        if (!File.Exists(envPath)) return null;
+        foreach (var rawLine in File.ReadLines(envPath))
         {
-            if (!File.Exists(Path.Combine(directory.FullName, "Dabom.sln")))
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            const string prefix = "DABOM_TMDB_ACCESS_TOKEN=";
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
             {
-                continue;
+                return line[prefix.Length..].Trim().Trim('"');
             }
-
-            var envPath = Path.Combine(directory.FullName, ".env");
-            if (!File.Exists(envPath)) return null;
-            foreach (var rawLine in File.ReadLines(envPath))
-            {
-                var line = rawLine.Trim();
-                if (line.Length == 0 || line.StartsWith('#')) continue;
-                const string prefix = "DABOM_TMDB_ACCESS_TOKEN=";
-                if (line.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    return line[prefix.Length..].Trim().Trim('"');
-                }
-            }
-            return null;
         }
 
         return null;

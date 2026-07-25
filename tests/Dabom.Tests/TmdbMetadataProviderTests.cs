@@ -617,24 +617,27 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
-    public void TmdbAccessToken_ReadsOnlyNamedValueFromRepositoryEnv()
+    public void TmdbAccessToken_ReadsOnlyNamedValueFromLocalAppDataEnv()
     {
         var root = Directory.CreateTempSubdirectory("dabom-token-");
         try
         {
-            File.WriteAllText(Path.Combine(root.FullName, "Dabom.sln"), string.Empty);
             File.WriteAllText(
                 Path.Combine(root.FullName, ".env"),
+                "DABOM_TMDB_ACCESS_TOKEN=wrong-location");
+            var dabom = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Dabom"));
+            File.WriteAllText(
+                Path.Combine(dabom.FullName, ".env"),
                 """
                 # 주석
                 OTHER_TOKEN=wrong
                 DABOM_TMDB_ACCESS_TOKEN_EXTRA=wrong
                 DABOM_TMDB_ACCESS_TOKEN="right-token"
                 """);
-            var nested = Directory.CreateDirectory(
-                Path.Combine(root.FullName, "src", "Dabom"));
 
-            var token = TmdbAccessToken.ReadFromRepository(nested.FullName);
+            var token = TmdbAccessToken.ReadFromLocalApplicationData(
+                root.FullName);
 
             Assert.AreEqual("right-token", token);
         }
