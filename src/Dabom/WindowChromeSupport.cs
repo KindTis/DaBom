@@ -401,6 +401,7 @@ public static class WindowChromeSupport
                 && IsPointOverButton(button, lParam);
             SetIsCaptionHovered(button, isPressed);
             SetIsCaptionPressed(button, isPressed);
+            handled = isPressed;
             return IntPtr.Zero;
         }
 

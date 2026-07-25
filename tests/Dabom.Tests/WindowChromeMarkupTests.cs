@@ -100,6 +100,7 @@ public sealed class WindowChromeMarkupTests
         StringAssert.Contains(code, "LegacyContentMarginProperty");
         StringAssert.Contains(code, "SetLegacyContentMargin");
         StringAssert.Contains(code, "TrackMouseEvent");
+        StringAssert.Contains(code, "handled = isPressed;");
         StringAssert.Contains(code, "SystemCommands.MaximizeWindow(window)");
         StringAssert.Contains(code, "SystemCommands.RestoreWindow(window)");
         StringAssert.Contains(theme, "Property=\"local:WindowChromeSupport.IsCaptionHovered\"");
