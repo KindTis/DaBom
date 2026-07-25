@@ -16,7 +16,7 @@ AGENTS.md
 # .NET build outputs
 **/bin/
 **/obj/
-docs
+/docs/
 graphify-out
 reference-design
 .env
