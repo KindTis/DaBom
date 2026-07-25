@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -6,6 +7,8 @@ namespace Dabom.Library;
 
 public sealed class LibraryStore
 {
+    private const long MaxPosterBytes = 10_485_760;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -18,6 +21,8 @@ public sealed class LibraryStore
 
     private readonly Func<string, string, CancellationToken, Task> _commit;
     private readonly Action<string> _deletePoster;
+    private readonly Func<string, CancellationToken, Task<string?>>
+        _getPosterExtension;
 
     public LibraryStore() : this(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Dabom")) { }
@@ -25,13 +30,16 @@ public sealed class LibraryStore
     internal LibraryStore(
         string rootPath,
         Func<string, string, CancellationToken, Task>? commit = null,
-        Action<string>? deletePoster = null)
+        Action<string>? deletePoster = null,
+        Func<string, CancellationToken, Task<string?>>? getPosterExtension = null)
     {
         RootPath = Path.GetFullPath(rootPath);
         JsonPath = Path.Combine(RootPath, "library.json");
         PostersPath = Path.Combine(RootPath, "posters");
         _commit = commit ?? CommitFileAsync;
         _deletePoster = deletePoster ?? File.Delete;
+        _getPosterExtension =
+            getPosterExtension ?? PosterImage.TryGetExtensionAsync;
     }
 
     internal string RootPath { get; }
@@ -122,6 +130,103 @@ public sealed class LibraryStore
         {
             try { File.Delete(temporary); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    public async Task SaveAsync(
+        LibraryData data,
+        string? createdPoster,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SaveAsync(data, cancellationToken);
+        }
+        catch
+        {
+            try { DeletePoster(createdPoster); }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
+    public async Task<string> DownloadPosterAsync(
+        HttpClient client,
+        Uri source,
+        CancellationToken cancellationToken)
+    {
+        if (!source.IsAbsoluteUri || source.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidDataException("포스터 주소는 HTTPS여야 합니다.");
+        }
+
+        using var response = await client.GetAsync(
+            source,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength > MaxPosterBytes)
+        {
+            throw new InvalidDataException("포스터가 10 MiB 제한을 넘습니다.");
+        }
+
+        Directory.CreateDirectory(PostersPath);
+        var temporary = Path.Combine(
+            PostersPath,
+            $".{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using var input = await response.Content.ReadAsStreamAsync(
+                cancellationToken);
+            await using (var output = new FileStream(
+                temporary,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None))
+            {
+                var buffer = new byte[81_920];
+                long total = 0;
+                int read;
+                while ((read = await input.ReadAsync(
+                    buffer, cancellationToken)) > 0)
+                {
+                    total += read;
+                    if (total > MaxPosterBytes)
+                    {
+                        throw new InvalidDataException(
+                            "포스터가 10 MiB 제한을 넘습니다.");
+                    }
+                    await output.WriteAsync(
+                        buffer.AsMemory(0, read),
+                        cancellationToken);
+                }
+                await output.FlushAsync(cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var extension = await _getPosterExtension(
+                temporary,
+                cancellationToken)
+                ?? throw new InvalidDataException(
+                    "지원하지 않거나 손상된 포스터입니다.");
+            cancellationToken.ThrowIfCancellationRequested();
+            var fileName = $"{Guid.NewGuid():D}{extension}";
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporary, Path.Combine(PostersPath, fileName));
+            return Path.Combine("posters", fileName).Replace('\\', '/');
+        }
+        catch (Exception error)
+        {
+            try { File.Delete(temporary); }
+            catch (Exception cleanupError) when (
+                cleanupError is IOException or UnauthorizedAccessException) { }
+            if (error is OperationCanceledException
+                && cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            throw;
         }
     }
 

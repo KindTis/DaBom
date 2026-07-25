@@ -1,5 +1,7 @@
 using Dabom.Library;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -310,6 +312,228 @@ public sealed class LibraryStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task DownloadPosterAsync_UsesDecodedFormatAndRelativePath()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-remote-poster-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            using var client = new HttpClient(new ResponseHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(PngBytes())
+                }));
+
+            var relative = await store.DownloadPosterAsync(
+                client,
+                new Uri("https://image.tmdb.org/poster.bin"),
+                CancellationToken.None);
+
+            StringAssert.EndsWith(relative, ".png");
+            Assert.IsTrue(File.Exists(store.ResolvePosterPath(relative)));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DownloadPosterAsync_AcceptsDecodableJpegWithUnsupportedMetadata()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-remote-jpeg-metadata-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            using var client = new HttpClient(new ResponseHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(JpegWithUnsupportedMetadata())
+                }));
+
+            var relative = await store.DownloadPosterAsync(
+                client,
+                new Uri("https://image.tmdb.org/poster.jpg"),
+                CancellationToken.None);
+
+            StringAssert.EndsWith(relative, ".jpg");
+            Assert.IsTrue(File.Exists(store.ResolvePosterPath(relative)));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DownloadPosterAsync_RejectsOversizeAndInvalidImagesWithoutResidue()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-remote-invalid-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            using var oversize = new HttpClient(new ResponseHandler(_ =>
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent([1])
+                };
+                response.Content.Headers.ContentLength = 10_485_761;
+                return response;
+            }));
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                store.DownloadPosterAsync(
+                    oversize,
+                    new Uri("https://image.tmdb.org/large.jpg"),
+                    CancellationToken.None));
+
+            using var invalid = new HttpClient(new ResponseHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent([1, 2, 3])
+                }));
+            await Assert.ThrowsExceptionAsync<InvalidDataException>(() =>
+                store.DownloadPosterAsync(
+                    invalid,
+                    new Uri("https://image.tmdb.org/bad.jpg"),
+                    CancellationToken.None));
+
+            Assert.AreEqual(0, Directory.EnumerateFiles(store.PostersPath).Count());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SaveAsync_WhenJsonCommitFails_DeletesCreatedPoster()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-poster-rollback-");
+        try
+        {
+            var working = new LibraryStore(root.FullName);
+            var source = Path.Combine(root.FullName, "source.png");
+            await File.WriteAllBytesAsync(source, PngBytes());
+            var created = await working.ImportPosterAsync(@"D:\Movie.mkv", source);
+            var failing = new LibraryStore(
+                root.FullName,
+                (_, _, _) => throw new IOException("disk full"));
+
+            await Assert.ThrowsExceptionAsync<IOException>(() =>
+                failing.SaveAsync(
+                    new LibraryData(),
+                    created,
+                    CancellationToken.None));
+
+            Assert.IsFalse(File.Exists(working.ResolvePosterPath(created)));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DownloadPosterAsync_WhenCanceledDuringRead_RemovesTemporaryFile()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-remote-cancel-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            var stream = new BlockingReadStream();
+            using var client = new HttpClient(new ResponseHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StreamContent(stream)
+                }));
+            using var cancellation = new CancellationTokenSource();
+
+            var download = store.DownloadPosterAsync(
+                client,
+                new Uri("https://image.tmdb.org/slow.jpg"),
+                cancellation.Token);
+            await stream.Blocked.Task;
+            cancellation.Cancel();
+
+            await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => download);
+            Assert.AreEqual(0, Directory.EnumerateFiles(store.PostersPath).Count());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DownloadPosterAsync_WhenCanceledDuringValidation_RemovesTemporaryFile()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-remote-validation-cancel-");
+        try
+        {
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var store = new LibraryStore(
+                root.FullName,
+                getPosterExtension: async (_, token) =>
+                {
+                    started.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return ".png";
+                });
+            using var client = new HttpClient(new ResponseHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(PngBytes())
+                }));
+            using var cancellation = new CancellationTokenSource();
+
+            var download = store.DownloadPosterAsync(
+                client,
+                new Uri("https://image.tmdb.org/poster.png"),
+                cancellation.Token);
+            await started.Task;
+            cancellation.Cancel();
+
+            await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => download);
+            Assert.AreEqual(0, Directory.EnumerateFiles(store.PostersPath).Count());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    private static byte[] PngBytes()
+    {
+        var bitmap = BitmapSource.Create(
+            2, 2, 96, 96, PixelFormats.Bgra32, null, new byte[16], 8);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray();
+    }
+
+    private static byte[] JpegWithUnsupportedMetadata()
+    {
+        var bitmap = BitmapSource.Create(
+            2, 2, 96, 96, PixelFormats.Bgr24, null, new byte[12], 6);
+        var encoder = new JpegBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        var jpeg = stream.ToArray();
+        var app13 = Convert.FromBase64String(
+            "/+0AK1Bob3Rvc2hvcCAzLjAAOEJJTQQEAAAAAAAPHAFaAAMbJUccAgAAAgAA");
+        var result = new byte[jpeg.Length + app13.Length];
+        Array.Copy(jpeg, 0, result, 0, 20);
+        Array.Copy(app13, 0, result, 20, app13.Length);
+        Array.Copy(jpeg, 20, result, 20 + app13.Length, jpeg.Length - 20);
+        return result;
+    }
+
     private static void WritePng(string path)
     {
         var bitmap = BitmapSource.Create(
@@ -318,5 +542,70 @@ public sealed class LibraryStoreTests
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = File.Create(path);
         encoder.Save(stream);
+    }
+
+    private sealed class ResponseHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(respond(request));
+    }
+
+    private sealed class BlockingReadStream : Stream
+    {
+        private bool _sentFirstByte;
+        public TaskCompletionSource Blocked { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_sentFirstByte)
+            {
+                _sentFirstByte = true;
+                buffer.Span[0] = 1;
+                return ValueTask.FromResult(1);
+            }
+
+            Blocked.TrySetResult();
+            return new(WaitForCancellationAsync(cancellationToken));
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        private static async Task<int> WaitForCancellationAsync(
+            CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
 }
