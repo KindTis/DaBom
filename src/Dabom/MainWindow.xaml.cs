@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private const int ExtendedStyle = -20;
     private const long TransparentStyle = 0x20;
     private const long NoActivateStyle = 0x08000000;
+    private const double LibraryToolbarBaseline = 18d;
 
     private ListBoxItem? _hoveredCard;
     private ListBoxItem? _focusedCard;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        CardPopup.CustomPopupPlacementCallback = PlaceCardPopup;
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -140,6 +142,40 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnMainScrollChanged(object sender, ScrollChangedEventArgs e) =>
+        UpdateLibraryToolbarPosition();
+
+    private void OnMainScrollContentLayoutUpdated(object? sender, EventArgs e) =>
+        UpdateLibraryToolbarPosition();
+
+    private void UpdateLibraryToolbarPosition()
+    {
+        if (!MainScrollViewer.IsArrangeValid || !LibraryToolbar.IsArrangeValid)
+        {
+            LibraryToolbarTransform.Y = 0;
+            return;
+        }
+
+        var renderedTop =
+            LibraryToolbar.TranslatePoint(new Point(), MainScrollViewer).Y;
+        var originalTop = renderedTop - LibraryToolbarTransform.Y;
+        var translation = GetLibraryToolbarTranslation(
+            originalTop,
+            MainScrollViewer.ScrollableHeight);
+
+        if (LibraryToolbarTransform.Y != translation)
+        {
+            LibraryToolbarTransform.Y = translation;
+        }
+    }
+
+    internal static double GetLibraryToolbarTranslation(
+        double originalTop,
+        double scrollableHeight) =>
+        scrollableHeight > 0 && originalTop < LibraryToolbarBaseline
+            ? LibraryToolbarBaseline - originalTop
+            : 0;
+
     private void RefreshCardPopup()
     {
         var activeCard = _hoveredCard ?? _focusedCard;
@@ -198,11 +234,25 @@ public partial class MainWindow : Window
     private void UpdateCardPopupPointerPlacement(ListBoxItem card, MouseEventArgs e)
     {
         var position = e.GetPosition(card);
-        CardPopup.Placement = PlacementMode.RelativePoint;
-        CardPopup.PlacementRectangle = new Rect(position.X + 24, position.Y - 76, 0, 0);
+        CardPopup.Placement = PlacementMode.Custom;
+        CardPopup.PlacementRectangle = new Rect(position.X, position.Y, 0, 0);
         CardPopup.HorizontalOffset = 0;
         CardPopup.VerticalOffset = 0;
     }
+
+    private static CustomPopupPlacement[] PlaceCardPopup(
+        Size popupSize,
+        Size targetSize,
+        Point offset) =>
+        GetCardPopupPlacements(popupSize);
+
+    internal static CustomPopupPlacement[] GetCardPopupPlacements(Size popupSize) =>
+    [
+        new(new Point(24, -76), PopupPrimaryAxis.Vertical),
+        new(new Point(24, -popupSize.Height - 8), PopupPrimaryAxis.Vertical),
+        new(new Point(-popupSize.Width - 24, -76), PopupPrimaryAxis.Vertical),
+        new(new Point(-popupSize.Width - 24, -popupSize.Height - 8), PopupPrimaryAxis.Vertical),
+    ];
 
     private void OnCardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {

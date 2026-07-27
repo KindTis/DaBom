@@ -4,7 +4,7 @@
         xmlns:main="clr-namespace:Dabom.Main"
         xmlns:library="clr-namespace:Dabom.Library"
         Title="DABOM" Icon="Assets/Dabom.ico"
-        Width="1440" Height="1000" MinWidth="760" MinHeight="640"
+        Width="1467" Height="1000" MinWidth="760" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         Style="{StaticResource {x:Type Window}}"
         PreviewKeyDown="OnPreviewKeyDown" Loaded="OnLoaded">
@@ -99,16 +99,25 @@
         </Ellipse>
         <Canvas x:Name="DustCanvas" IsHitTestVisible="False" />
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-            <Grid MaxWidth="1720" Margin="32,18,32,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+        <Grid x:Name="MainContentLayout">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <ScrollViewer x:Name="MainScrollViewer"
+                          Grid.Row="0" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          HorizontalContentAlignment="Stretch"
+                          ScrollChanged="OnMainScrollChanged">
+                <Grid x:Name="MainScrollContent"
+                      MaxWidth="1720" Margin="32,18,32,0"
+                      LayoutUpdated="OnMainScrollContentLayoutUpdated">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0" Height="62">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -283,10 +292,14 @@
                     </StackPanel>
                 </Border>
 
-                <Border x:Name="LibraryToolbar" Grid.Row="2" Margin="0,24,0,0"
+                <Border x:Name="LibraryToolbar" Grid.Row="2" Panel.ZIndex="1"
+                        Margin="0,24,0,0"
                         Padding="18,15" CornerRadius="{StaticResource SurfaceCornerRadius}"
                         Background="#E6121314"
                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                    <Border.RenderTransform>
+                        <TranslateTransform x:Name="LibraryToolbarTransform" />
+                    </Border.RenderTransform>
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="24" ShadowDepth="9"
                                           Direction="270" Opacity="0.28" />
@@ -500,7 +513,11 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <Grid Grid.Row="4" MinHeight="92">
+                </Grid>
+            </ScrollViewer>
+
+            <Grid x:Name="LibraryFooter" Grid.Row="1" MinHeight="92"
+                  MaxWidth="1720" Margin="32,0,32,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -533,9 +550,8 @@
                         </Button>
                         <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}" />
                     </StackPanel>
-                </Grid>
             </Grid>
-        </ScrollViewer>
+        </Grid>
 
         <Popup x:Name="LocationsPopup" Placement="MousePoint" StaysOpen="False"
                AllowsTransparency="True">
@@ -599,10 +615,6 @@
                         <GradientStop Color="#FF262729" Offset="1" />
                     </LinearGradientBrush>
                 </Border.Background>
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="42" ShadowDepth="16"
-                                      Direction="270" Opacity="0.62" />
-                </Border.Effect>
                 <Grid x:Name="CardPopupSurface">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="126" />

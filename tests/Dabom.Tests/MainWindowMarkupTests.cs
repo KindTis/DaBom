@@ -1,5 +1,7 @@
 using System.IO;
+using System.Windows;
 using System.Windows.Media.Imaging;
+using System.Xml.Linq;
 
 namespace Dabom.Tests;
 
@@ -12,6 +14,15 @@ public sealed class MainWindowMarkupTests
         var markup = ReadMainWindowMarkup();
 
         StringAssert.Contains(markup, "WindowStartupLocation=\"CenterScreen\"");
+    }
+
+    [TestMethod]
+    public void MainWindow_UsesCapturedDefaultSize()
+    {
+        var window = XDocument.Parse(ReadMainWindowMarkup()).Root!;
+
+        Assert.AreEqual("1467", (string?)window.Attribute("Width"));
+        Assert.AreEqual("1000", (string?)window.Attribute("Height"));
     }
 
     [TestMethod]
@@ -92,6 +103,64 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void LibraryFooter_StaysOutsideScrollableContent()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var layout = document
+            .Descendants(presentation + "Grid")
+            .SingleOrDefault(element =>
+                (string?)element.Attribute(x + "Name") == "MainContentLayout");
+
+        Assert.IsNotNull(layout, "고정 하단 영역을 위한 레이아웃 Grid가 필요합니다.");
+        var rowHeights = layout
+            .Element(presentation + "Grid.RowDefinitions")!
+            .Elements(presentation + "RowDefinition")
+            .Select(row => (string?)row.Attribute("Height"))
+            .ToArray();
+        CollectionAssert.AreEqual(new[] { "*", "Auto" }, rowHeights);
+
+        var scroller = layout.Elements(presentation + "ScrollViewer").Single();
+        var footer = layout
+            .Elements(presentation + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "LibraryFooter");
+        Assert.AreEqual("0", (string?)scroller.Attribute("Grid.Row"));
+        Assert.AreEqual("1", (string?)footer.Attribute("Grid.Row"));
+    }
+
+    [TestMethod]
+    public void MainScrollBar_ReachesWindowEdgeWhileContentKeepsPageMargin()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var layout = document
+            .Descendants(presentation + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "MainContentLayout");
+        var scroller = layout.Elements(presentation + "ScrollViewer").Single();
+        var content = scroller.Elements(presentation + "Grid").Single();
+        var footer = layout
+            .Elements(presentation + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "LibraryFooter");
+
+        Assert.IsNull(layout.Attribute("Margin"));
+        Assert.IsNull(layout.Attribute("MaxWidth"));
+        Assert.AreEqual("Stretch", (string?)scroller.Attribute("HorizontalContentAlignment"));
+        Assert.AreEqual("32,18,32,0", (string?)content.Attribute("Margin"));
+        Assert.AreEqual("1720", (string?)content.Attribute("MaxWidth"));
+        Assert.AreEqual("32,0,32,0", (string?)footer.Attribute("Margin"));
+        Assert.AreEqual("1720", (string?)footer.Attribute("MaxWidth"));
+    }
+
+    [TestMethod]
     public void FeaturedPlay_UsesReferencePrimaryAction()
     {
         var markup = ReadMainWindowMarkup();
@@ -148,6 +217,62 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"정렬\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"영상 검색\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"정렬\"");
+    }
+
+    [DataTestMethod]
+    [DataRow(30d, 200d, 0d)]
+    [DataRow(18d, 200d, 0d)]
+    [DataRow(17d, 200d, 1d)]
+    [DataRow(-22d, 200d, 40d)]
+    [DataRow(-22d, 0d, 0d)]
+    public void LibraryToolbarTranslation_UsesBaselineAndRequiresScrolling(
+        double originalTop,
+        double scrollableHeight,
+        double expected)
+    {
+        Assert.AreEqual(
+            expected,
+            MainWindow.GetLibraryToolbarTranslation(originalTop, scrollableHeight));
+    }
+
+    [TestMethod]
+    public void LibraryToolbar_UsesSingleRenderTransformForStickyPlacement()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var scroller = document
+            .Descendants(presentation + "ScrollViewer")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "MainScrollViewer");
+        var content = scroller
+            .Elements(presentation + "Grid")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "MainScrollContent");
+        var toolbars = content
+            .Descendants(presentation + "Border")
+            .Where(element =>
+                (string?)element.Attribute(x + "Name") == "LibraryToolbar")
+            .ToArray();
+
+        Assert.AreEqual(1, toolbars.Length);
+        Assert.AreEqual(
+            "OnMainScrollChanged",
+            (string?)scroller.Attribute("ScrollChanged"));
+        Assert.AreEqual(
+            "OnMainScrollContentLayoutUpdated",
+            (string?)content.Attribute("LayoutUpdated"));
+        Assert.AreEqual("1", (string?)toolbars[0].Attribute("Panel.ZIndex"));
+
+        var transform = toolbars[0]
+            .Element(presentation + "Border.RenderTransform")?
+            .Element(presentation + "TranslateTransform");
+        Assert.IsNotNull(transform);
+        Assert.AreEqual(
+            "LibraryToolbarTransform",
+            (string?)transform.Attribute(x + "Name"));
     }
 
     [TestMethod]
@@ -269,9 +394,42 @@ public sealed class MainWindowMarkupTests
 
         StringAssert.Contains(markup, "<EventSetter Event=\"MouseMove\" Handler=\"OnCardMove\" />");
         StringAssert.Contains(code, "private void OnCardMove");
-        StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.RelativePoint;");
+        StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.Custom;");
         StringAssert.Contains(code, "CardPopup.PlacementRectangle = new Rect(");
         StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.Right;");
+    }
+
+    [TestMethod]
+    public void CardPopupPlacement_KeepsPointerOffsetAndUsesScreenEdgeFallbacks()
+    {
+        var placements = MainWindow.GetCardPopupPlacements(new Size(430, 600));
+        var points = placements.Select(placement => placement.Point).ToArray();
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                new Point(24, -76),
+                new Point(24, -608),
+                new Point(-454, -76),
+                new Point(-454, -608),
+            },
+            points);
+    }
+
+    [TestMethod]
+    public void CardPopup_DoesNotRenderOuterShadow()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var popup = document
+            .Descendants(presentation + "Popup")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name") == "CardPopup");
+
+        Assert.IsFalse(popup.Descendants(presentation + "DropShadowEffect").Any());
     }
 
     [TestMethod]
