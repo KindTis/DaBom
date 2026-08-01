@@ -45,6 +45,168 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task FilterOptions_NormalizeSortDeduplicateAndCountAgainstSearch()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-options-");
+        try
+        {
+            var alpha = Path.Combine(root.FullName, "Alpha.mkv");
+            var beta = Path.Combine(root.FullName, "Beta.mkv");
+            var gamma = Path.Combine(root.FullName, "Gamma.mkv");
+            var data = CachedData(root.FullName, alpha, beta, gamma);
+            data.VideosByPath[alpha] = data.VideosByPath[alpha] with
+            {
+                Title = "Alpha",
+                Genres = [" Drama ", "가족", "  "],
+                MetadataStatus = MetadataStatus.Pending
+            };
+            data.VideosByPath[beta] = data.VideosByPath[beta] with
+            {
+                Title = "Beta",
+                Genres = ["drama", "코미디"],
+                MetadataStatus = MetadataStatus.Matched
+            };
+            data.VideosByPath[gamma] = data.VideosByPath[gamma] with
+            {
+                Title = "Gamma",
+                Genres = ["드라마 코미디"],
+                MetadataStatus = MetadataStatus.Failed
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(alpha, beta, gamma),
+                data);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual("필터", vm.SelectedFilter!.ButtonText);
+            Assert.AreEqual("영상 필터: 전체 영상", vm.FilterAutomationName);
+            var genres = vm.FilterOptions
+                .Where(option => option.Kind == LibraryFilterKind.Genre)
+                .ToArray();
+            Assert.AreEqual(4, genres.Length);
+            Assert.AreEqual(1, genres.Count(option =>
+                option.Genre!.Equals("Drama", StringComparison.CurrentCultureIgnoreCase)));
+            Assert.IsFalse(genres.Any(option => string.IsNullOrWhiteSpace(option.Genre)));
+            CollectionAssert.AreEqual(
+                genres.Select(option => option.Label)
+                    .OrderBy(label => label, StringComparer.CurrentCultureIgnoreCase)
+                    .ToArray(),
+                genres.Select(option => option.Label).ToArray());
+
+            vm.SearchText = "Alpha";
+
+            Assert.AreEqual(1, Filter(vm, LibraryFilterKind.All).Count);
+            Assert.AreEqual(1, Filter(vm, LibraryFilterKind.MissingMetadata).Count);
+            Assert.AreEqual(1, Filter(vm, LibraryFilterKind.Genre, "Drama").Count);
+            Assert.AreEqual(0, Filter(vm, LibraryFilterKind.Genre, "코미디").Count);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task GenreFilter_UsesCaseInsensitiveNormalizedExactMatchAndSearchAnd()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-genre-filter-");
+        try
+        {
+            var alpha = Path.Combine(root.FullName, "Alpha.mkv");
+            var beta = Path.Combine(root.FullName, "Beta.mkv");
+            var gamma = Path.Combine(root.FullName, "Gamma.mkv");
+            var data = CachedData(root.FullName, alpha, beta, gamma);
+            data.VideosByPath[alpha] = data.VideosByPath[alpha] with
+            {
+                Title = "Alpha",
+                Genres = [" Drama "]
+            };
+            data.VideosByPath[beta] = data.VideosByPath[beta] with
+            {
+                Title = "Beta",
+                Genres = ["drama"]
+            };
+            data.VideosByPath[gamma] = data.VideosByPath[gamma] with
+            {
+                Title = "Gamma",
+                Genres = ["Drama Comedy"]
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(alpha, beta, gamma),
+                data);
+            await vm.ScanAsync();
+            var featured = vm.FeaturedVideo;
+
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "DRAMA");
+
+            CollectionAssert.AreEquivalent(
+                new[] { alpha, beta },
+                vm.VisibleVideos.Cast<VideoItemViewModel>()
+                    .Select(video => video.Path)
+                    .ToArray());
+            Assert.AreSame(featured, vm.FeaturedVideo);
+
+            vm.SelectedVideo = vm.Videos.Single(video => video.Path == alpha);
+            vm.SearchText = "Alpha";
+            Assert.AreEqual(1, vm.VisibleCount);
+            Assert.IsNotNull(vm.SelectedVideo);
+
+            vm.SearchText = "Gamma";
+            Assert.AreEqual(0, vm.VisibleCount);
+            Assert.IsNull(vm.SelectedVideo);
+
+            vm.SelectedSort = VideoSort.ReleaseDate;
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.All);
+
+            Assert.AreEqual("Gamma", vm.SearchText);
+            Assert.AreEqual(VideoSort.ReleaseDate, vm.SelectedSort);
+            Assert.AreEqual(1, vm.VisibleCount);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(MetadataStatus.Unspecified, true)]
+    [DataRow(MetadataStatus.Pending, true)]
+    [DataRow(MetadataStatus.NotFound, true)]
+    [DataRow(MetadataStatus.Failed, true)]
+    [DataRow(MetadataStatus.Matched, false)]
+    [DataRow(MetadataStatus.Manual, false)]
+    public async Task MissingMetadataFilter_UsesOnlyApprovedStatuses(
+        MetadataStatus status,
+        bool expectedVisible)
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-status-filter-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                MetadataStatus = status
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(path),
+                data);
+            await vm.ScanAsync();
+
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.MissingMetadata);
+
+            Assert.AreEqual(expectedVisible ? 1 : 0, vm.VisibleCount);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task AddLocation_WhenSaveFails_KeepsPreviousLocations()
     {
         var root = Directory.CreateTempSubdirectory("dabom-location-");
@@ -1590,6 +1752,17 @@ public sealed class MainViewModelTests
             root.Delete(true);
         }
     }
+
+    private static LibraryFilterOption Filter(
+        MainViewModel viewModel,
+        LibraryFilterKind kind,
+        string? genre = null) =>
+        viewModel.FilterOptions.Single(option =>
+            option.Kind == kind
+            && (genre is null || string.Equals(
+                option.Genre,
+                genre,
+                StringComparison.CurrentCultureIgnoreCase)));
 
     private static MainViewModel CreateViewModel(
         LibraryStore store,

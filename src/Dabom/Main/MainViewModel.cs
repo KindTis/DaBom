@@ -8,6 +8,31 @@ using System.Windows.Input;
 
 namespace Dabom.Main;
 
+public enum LibraryFilterKind
+{
+    All,
+    MissingMetadata,
+    Genre
+}
+
+public sealed record LibraryFilterOption(
+    LibraryFilterKind Kind,
+    string? Genre,
+    int Count,
+    bool StartsGenreSection = false)
+{
+    public string Label => Kind switch
+    {
+        LibraryFilterKind.All => "전체 영상",
+        LibraryFilterKind.MissingMetadata => "메타데이터 없음",
+        _ => Genre ?? string.Empty
+    };
+
+    public string ButtonText => Kind == LibraryFilterKind.All ? "필터" : Label;
+    public string AutomationName => $"{Label}, {Count}편";
+    public override string ToString() => ButtonText;
+}
+
 public sealed class MainViewModel : ViewModelBase
 {
     private readonly LibraryStore _store;
@@ -18,6 +43,10 @@ public sealed class MainViewModel : ViewModelBase
     private readonly MetadataEnrichmentService? _metadataEnrichment;
     private readonly ListCollectionView _visibleVideos;
     private LibraryData _data;
+    private LibraryFilterOption _selectedFilter = new(
+        LibraryFilterKind.All,
+        null,
+        0);
 
     public MainViewModel(
         LibraryStore store,
@@ -66,8 +95,10 @@ public sealed class MainViewModel : ViewModelBase
             path => CanMutateLibrary && path is string);
         Locations = new(data.Locations);
         _visibleVideos = (ListCollectionView)CollectionViewSource.GetDefaultView(Videos);
-        _visibleVideos.Filter = item => ((VideoItemViewModel)item).Matches(SearchText);
+        _visibleVideos.Filter = item =>
+            MatchesVisibleConditions((VideoItemViewModel)item);
         ApplySort();
+        RefreshFilterOptions();
         if (!store.CanSave)
         {
             StatusMessage = store.LoadWarning
@@ -77,6 +108,7 @@ public sealed class MainViewModel : ViewModelBase
 
     public ObservableCollection<string> Locations { get; }
     public ObservableCollection<VideoItemViewModel> Videos { get; } = [];
+    public ObservableCollection<LibraryFilterOption> FilterOptions { get; } = [];
     public ObservableCollection<ScanWarning> Warnings { get; } = [];
     public System.ComponentModel.ICollectionView VisibleVideos => _visibleVideos;
     public int VisibleCount => VisibleVideos.Cast<object>().Count();
@@ -178,6 +210,25 @@ public sealed class MainViewModel : ViewModelBase
         ? $"마지막 확인: {utc.ToLocalTime():yyyy-MM-dd HH:mm}"
         : "마지막 확인: —";
 
+    public LibraryFilterOption? SelectedFilter
+    {
+        get => _selectedFilter;
+        set
+        {
+            if (value is null || SameFilter(_selectedFilter, value)) return;
+            var removeDisappearedGenre = _selectedFilter.Kind == LibraryFilterKind.Genre
+                && !HasCurrentGenre(_selectedFilter.Genre);
+            _selectedFilter = value;
+            Raise();
+            Raise(nameof(IsFilterActive));
+            Raise(nameof(FilterAutomationName));
+            RefreshLibraryView(removeDisappearedGenre);
+        }
+    }
+
+    public bool IsFilterActive => _selectedFilter.Kind != LibraryFilterKind.All;
+    public string FilterAutomationName => $"영상 필터: {_selectedFilter.Label}";
+
     private string _searchText = string.Empty;
     public string SearchText
     {
@@ -185,12 +236,7 @@ public sealed class MainViewModel : ViewModelBase
         set
         {
             if (!Set(ref _searchText, value)) return;
-            VisibleVideos.Refresh();
-            Raise(nameof(VisibleCount));
-            if (SelectedVideo is not null && !SelectedVideo.Matches(value))
-            {
-                SelectedVideo = null;
-            }
+            RefreshLibraryView(true);
         }
     }
 
@@ -570,8 +616,7 @@ public sealed class MainViewModel : ViewModelBase
             Videos.Remove(item);
         }
 
-        VisibleVideos.Refresh();
-        Raise(nameof(VisibleCount));
+        RefreshLibraryView(true);
     }
 
     private void ReplaceWarnings(IEnumerable<ScanWarning> warnings)
@@ -579,6 +624,103 @@ public sealed class MainViewModel : ViewModelBase
         Warnings.Clear();
         foreach (var warning in warnings) Warnings.Add(warning);
     }
+
+    private void RefreshLibraryView(bool refreshFilterOptions)
+    {
+        if (refreshFilterOptions) RefreshFilterOptions();
+        _visibleVideos.Refresh();
+        Raise(nameof(VisibleCount));
+        if (SelectedVideo is not null && !MatchesVisibleConditions(SelectedVideo))
+        {
+            SelectedVideo = null;
+        }
+    }
+
+    private void RefreshFilterOptions()
+    {
+        var searched = Videos.Where(video => video.Matches(SearchText)).ToArray();
+        var genres = CurrentGenres().ToList();
+        if (_selectedFilter.Kind == LibraryFilterKind.Genre
+            && _selectedFilter.Genre is { } selectedGenre
+            && !genres.Contains(selectedGenre, StringComparer.CurrentCultureIgnoreCase))
+        {
+            genres.Add(selectedGenre);
+            genres.Sort(StringComparer.CurrentCultureIgnoreCase);
+        }
+
+        var options = new List<LibraryFilterOption>
+        {
+            new(LibraryFilterKind.All, null, searched.Length),
+            new(
+                LibraryFilterKind.MissingMetadata,
+                null,
+                searched.Count(video => NeedsMetadata(video.Record.MetadataStatus)))
+        };
+        options.AddRange(genres.Select((genre, index) => new LibraryFilterOption(
+            LibraryFilterKind.Genre,
+            genre,
+            searched.Count(video => HasGenre(video.Record, genre)),
+            index == 0)));
+
+        FilterOptions.Clear();
+        foreach (var option in options) FilterOptions.Add(option);
+        _selectedFilter = FilterOptions.Single(option =>
+            SameFilter(option, _selectedFilter));
+        Raise(nameof(SelectedFilter));
+        Raise(nameof(FilterAutomationName));
+    }
+
+    private IEnumerable<string> CurrentGenres() => Videos
+        .SelectMany(video => video.Record.Genres)
+        .Select(NormalizeGenre)
+        .Where(genre => genre is not null)
+        .Cast<string>()
+        .Distinct(StringComparer.CurrentCultureIgnoreCase)
+        .OrderBy(genre => genre, StringComparer.CurrentCultureIgnoreCase);
+
+    private bool MatchesVisibleConditions(VideoItemViewModel video) =>
+        video.Matches(SearchText) && MatchesSelectedFilter(video.Record);
+
+    private bool MatchesSelectedFilter(VideoRecord record) => _selectedFilter.Kind switch
+    {
+        LibraryFilterKind.MissingMetadata => NeedsMetadata(record.MetadataStatus),
+        LibraryFilterKind.Genre => HasGenre(record, _selectedFilter.Genre),
+        _ => true
+    };
+
+    private bool HasCurrentGenre(string? genre) =>
+        genre is not null && CurrentGenres().Contains(
+            genre,
+            StringComparer.CurrentCultureIgnoreCase);
+
+    private static bool HasGenre(VideoRecord record, string? genre) =>
+        genre is not null && record.Genres
+            .Select(NormalizeGenre)
+            .Any(value => string.Equals(
+                value,
+                genre,
+                StringComparison.CurrentCultureIgnoreCase));
+
+    private static string? NormalizeGenre(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ? null : normalized;
+    }
+
+    private static bool NeedsMetadata(MetadataStatus status) => status is
+        MetadataStatus.Unspecified
+        or MetadataStatus.Pending
+        or MetadataStatus.NotFound
+        or MetadataStatus.Failed;
+
+    private static bool SameFilter(
+        LibraryFilterOption left,
+        LibraryFilterOption right) =>
+        left.Kind == right.Kind
+        && string.Equals(
+            left.Genre,
+            right.Genre,
+            StringComparison.CurrentCultureIgnoreCase);
 
     private VideoItemViewModel? PickFeatured()
     {
