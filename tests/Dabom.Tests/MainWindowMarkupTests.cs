@@ -1,3 +1,4 @@
+using Dabom.Main;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -399,6 +400,31 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"상영일\"");
         StringAssert.Contains(markup, "Text=\"주요 배우\"");
         StringAssert.Contains(markup, "Text=\"영상\"");
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void CardPopup_DisplaysActualFileNameUnderTitle()
+    {
+        EnsureApplicationResources();
+        var window = new MainWindow();
+        try
+        {
+            var fileName = window.FindName("CardPopupFileName") as TextBlock;
+            Assert.IsNotNull(fileName);
+            var binding = fileName.GetBindingExpression(TextBlock.TextProperty);
+
+            Assert.IsNotNull(binding);
+            Assert.AreEqual(
+                nameof(VideoItemViewModel.FileName),
+                binding.ParentBinding.Path.Path);
+            Assert.AreEqual(10d, fileName.FontSize);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, fileName.TextTrimming);
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [TestMethod]
