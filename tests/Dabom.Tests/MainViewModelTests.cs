@@ -758,7 +758,7 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task ScanAsync_WhenEnrichedSelectedVideoLeavesFilter_ClearsSelection()
+    public async Task ScanAsync_WhenEnrichedSelectedVideoLeavesMetadataFilter_RefreshesViewAndSelection()
     {
         var root = Directory.CreateTempSubdirectory("dabom-enrich-filter-");
         try
@@ -795,13 +795,142 @@ public sealed class MainViewModelTests
 
             var scan = vm.ScanAsync();
             await started.Task;
-            vm.SearchText = "찾는 제목";
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.MissingMetadata);
+            vm.SelectedVideo = vm.Videos.Single();
+            Assert.IsTrue(vm.IsScanning);
+            Assert.AreEqual(1, vm.VisibleCount);
+            release.TrySetResult();
+            await scan;
+
+            Assert.AreEqual(0, vm.VisibleCount);
+            Assert.IsNull(vm.SelectedVideo);
+            Assert.AreEqual(
+                0,
+                Filter(vm, LibraryFilterKind.MissingMetadata).Count);
+            Assert.AreEqual(LibraryFilterKind.MissingMetadata, vm.SelectedFilter!.Kind);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenActiveGenreDisappears_KeepsZeroOptionUntilSelectionChanges()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-vanished-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Genres = ["액션"],
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var provider = new TestProvider(
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new("test", "movie", "1", MediaType.Movie)
+                ]),
+                async (_, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                    return MovieDetails("Movie", "1");
+                });
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            var scan = vm.ScanAsync();
+            await started.Task;
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "액션");
             vm.SelectedVideo = vm.Videos.Single();
             release.TrySetResult();
             await scan;
 
             Assert.AreEqual(0, vm.VisibleCount);
             Assert.IsNull(vm.SelectedVideo);
+            Assert.AreEqual(
+                0,
+                Filter(vm, LibraryFilterKind.Genre, "액션").Count);
+            Assert.AreEqual("액션", vm.SelectedFilter!.Genre);
+            Assert.AreEqual(
+                1,
+                Filter(vm, LibraryFilterKind.Genre, "드라마").Count);
+
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.All);
+
+            Assert.IsFalse(vm.FilterOptions.Any(option =>
+                string.Equals(
+                    option.Genre,
+                    "액션",
+                    StringComparison.CurrentCultureIgnoreCase)));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenEnrichedVideoStillMatchesGenreFilter_KeepsSelection()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-stays-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Genres = ["드라마"],
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var provider = new TestProvider(
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new("test", "movie", "1", MediaType.Movie)
+                ]),
+                async (_, _) =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                    return MovieDetails("Movie", "1");
+                });
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+
+            var scan = vm.ScanAsync();
+            await started.Task;
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "드라마");
+            var selected = vm.Videos.Single();
+            vm.SelectedVideo = selected;
+            release.TrySetResult();
+            await scan;
+
+            Assert.AreSame(selected, vm.SelectedVideo);
+            Assert.AreEqual(1, vm.VisibleCount);
+            Assert.AreEqual(
+                1,
+                Filter(vm, LibraryFilterKind.Genre, "드라마").Count);
         }
         finally
         {
@@ -990,6 +1119,62 @@ public sealed class MainViewModelTests
 
                 Assert.AreEqual(0, vm.VisibleCount);
                 Assert.IsNull(vm.SelectedVideo);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_WhenSelectedResultLeavesGenreFilter_RefreshesViewAndSelection()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-manual-filter-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "Movie",
+                    Genres = ["액션"],
+                    MetadataStatus = MetadataStatus.Manual
+                };
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails("Movie", "1")));
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "액션");
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.SearchText = "Movie";
+
+                Assert.IsTrue(await editor.SearchAsync());
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.AreEqual(0, vm.VisibleCount);
+                Assert.IsNull(vm.SelectedVideo);
+                Assert.AreEqual(
+                    0,
+                    Filter(vm, LibraryFilterKind.Genre, "액션").Count);
+                Assert.AreEqual(
+                    1,
+                    Filter(vm, LibraryFilterKind.Genre, "드라마").Count);
             }
             finally
             {
@@ -1753,6 +1938,129 @@ public sealed class MainViewModelTests
         }
     }
 
+    [TestMethod]
+    public async Task FilterEmptyState_DistinguishesMetadataCompleteFromSearchCombination()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-empty-");
+        try
+        {
+            var matchedPath = Path.Combine(root.FullName, "Matched.mkv");
+            var data = CachedData(root.FullName, matchedPath);
+            data.VideosByPath[matchedPath] = data.VideosByPath[matchedPath] with
+            {
+                MetadataStatus = MetadataStatus.Matched
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(matchedPath),
+                data);
+            await vm.ScanAsync();
+
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.MissingMetadata);
+
+            Assert.IsTrue(vm.IsFilterEmptyStateVisible);
+            Assert.IsTrue(vm.IsMetadataCompleteFilterEmpty);
+            Assert.AreEqual(
+                "모든 영상의 메타데이터가 준비되었습니다.",
+                vm.FilterEmptyTitle);
+            Assert.AreEqual(
+                "다른 영상을 보려면 ‘전체 영상’을 선택하세요.",
+                vm.FilterEmptyGuidance);
+
+            data.VideosByPath[matchedPath] = data.VideosByPath[matchedPath] with
+            {
+                MetadataStatus = MetadataStatus.Pending
+            };
+            var pendingVm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(matchedPath),
+                data);
+            await pendingVm.ScanAsync();
+            pendingVm.SelectedFilter = Filter(
+                pendingVm,
+                LibraryFilterKind.MissingMetadata);
+            pendingVm.SearchText = "일치하지 않는 검색어";
+
+            Assert.IsTrue(pendingVm.IsFilterEmptyStateVisible);
+            Assert.IsFalse(pendingVm.IsMetadataCompleteFilterEmpty);
+            Assert.AreEqual(
+                "현재 검색과 필터에 맞는 영상이 없습니다.",
+                pendingVm.FilterEmptyTitle);
+            Assert.AreEqual(
+                "검색어를 지우거나 ‘전체 영상’을 선택하세요.",
+                pendingVm.FilterEmptyGuidance);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task FilterEmptyState_DoesNotReplaceNoLocationOrEmptyLibraryStates()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-priority-");
+        try
+        {
+            var withoutLocation = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(),
+                new LibraryData());
+            withoutLocation.SelectedFilter = Filter(
+                withoutLocation,
+                LibraryFilterKind.MissingMetadata);
+            Assert.IsFalse(withoutLocation.IsFilterEmptyStateVisible);
+
+            var emptyLibrary = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(),
+                new LibraryData { Locations = [root.FullName] });
+            await emptyLibrary.ScanAsync();
+            emptyLibrary.SelectedFilter = Filter(
+                emptyLibrary,
+                LibraryFilterKind.MissingMetadata);
+            Assert.IsFalse(emptyLibrary.IsFilterEmptyStateVisible);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task FilterSelection_SurvivesEmptyScanAndReappliesWhenVideoReturns()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-filter-rescan-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Genres = ["드라마"]
+            };
+            var scanner = new SequenceScanner(Scan(path), Scan(), Scan(path));
+            var vm = CreateViewModel(new LibraryStore(root.FullName), scanner, data);
+            await vm.ScanAsync();
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "드라마");
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual("드라마", vm.SelectedFilter!.Genre);
+            Assert.AreEqual(0, vm.Videos.Count);
+            Assert.IsFalse(vm.IsFilterEmptyStateVisible);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual("드라마", vm.SelectedFilter!.Genre);
+            Assert.AreEqual(1, vm.VisibleCount);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     private static LibraryFilterOption Filter(
         MainViewModel viewModel,
         LibraryFilterKind kind,
@@ -1798,6 +2106,19 @@ public sealed class MainViewModelTests
                 [fullPath] = new(fullPath, size, DateTimeOffset.UnixEpoch, null)
             },
             [warning]);
+    }
+
+    private static ScanResult Scan(params string[] paths)
+    {
+        var videos = paths.ToDictionary(
+            Path.GetFullPath,
+            path => new ScannedVideo(
+                Path.GetFullPath(path),
+                1,
+                DateTimeOffset.UnixEpoch,
+                null),
+            StringComparer.OrdinalIgnoreCase);
+        return new(videos, []);
     }
 
     private static void RunOnDispatcher(Func<Task> action)

@@ -229,6 +229,22 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsFilterActive => _selectedFilter.Kind != LibraryFilterKind.All;
     public string FilterAutomationName => $"영상 필터: {_selectedFilter.Label}";
 
+    public bool IsFilterEmptyStateVisible =>
+        IsFilterActive && Videos.Count > 0 && VisibleCount == 0;
+
+    public bool IsMetadataCompleteFilterEmpty =>
+        _selectedFilter.Kind == LibraryFilterKind.MissingMetadata
+        && Videos.Count > 0
+        && Videos.All(video => !NeedsMetadata(video.Record.MetadataStatus));
+
+    public string FilterEmptyTitle => IsMetadataCompleteFilterEmpty
+        ? "모든 영상의 메타데이터가 준비되었습니다."
+        : "현재 검색과 필터에 맞는 영상이 없습니다.";
+
+    public string FilterEmptyGuidance => IsMetadataCompleteFilterEmpty
+        ? "다른 영상을 보려면 ‘전체 영상’을 선택하세요."
+        : "검색어를 지우거나 ‘전체 영상’을 선택하세요.";
+
     private string _searchText = string.Empty;
     public string SearchText
     {
@@ -517,12 +533,7 @@ public sealed class MainViewModel : ViewModelBase
             var video = Videos.Single(video =>
                 video.Path.Equals(editor.Path, StringComparison.OrdinalIgnoreCase));
             video.Update(updated, _store);
-            VisibleVideos.Refresh();
-            Raise(nameof(VisibleCount));
-            if (ReferenceEquals(SelectedVideo, video) && !video.Matches(SearchText))
-            {
-                SelectedVideo = null;
-            }
+            RefreshLibraryView(true);
 
             if (!string.Equals(
                 editor.OriginalRecord.Poster, newPoster, StringComparison.OrdinalIgnoreCase))
@@ -566,13 +577,7 @@ public sealed class MainViewModel : ViewModelBase
         var video = Videos.Single(item =>
             item.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
         video.Update(updated, _store);
-        VisibleVideos.Refresh();
-        Raise(nameof(VisibleCount));
-        if (ReferenceEquals(SelectedVideo, video)
-            && !video.Matches(SearchText))
-        {
-            SelectedVideo = null;
-        }
+        RefreshLibraryView(true);
 
         if (!string.Equals(
             old.Poster,
@@ -630,6 +635,10 @@ public sealed class MainViewModel : ViewModelBase
         if (refreshFilterOptions) RefreshFilterOptions();
         _visibleVideos.Refresh();
         Raise(nameof(VisibleCount));
+        Raise(nameof(IsFilterEmptyStateVisible));
+        Raise(nameof(IsMetadataCompleteFilterEmpty));
+        Raise(nameof(FilterEmptyTitle));
+        Raise(nameof(FilterEmptyGuidance));
         if (SelectedVideo is not null && !MatchesVisibleConditions(SelectedVideo))
         {
             SelectedVideo = null;
