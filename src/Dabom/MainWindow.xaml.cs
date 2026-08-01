@@ -109,6 +109,15 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnClearSearch(object sender, RoutedEventArgs e) => ClearSearch();
+
+    private void ClearSearch()
+    {
+        var viewModel = (MainViewModel)DataContext;
+        viewModel.SearchText = string.Empty;
+        SearchBox.Focus();
+    }
+
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         var viewModel = (MainViewModel)DataContext;
@@ -128,6 +137,13 @@ public partial class MainWindow : Window
             {
                 viewModel.OpenMetadataCommand.Execute(null);
             }
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape
+            && ReferenceEquals(e.OriginalSource, SearchBox)
+            && !string.IsNullOrEmpty(viewModel.SearchText))
+        {
+            ClearSearch();
             e.Handled = true;
         }
         else if (e.Key == Key.Escape)

@@ -371,14 +371,51 @@
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <Border Grid.Column="2" Margin="12,0,18,0" Padding="7,4"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center"
-                                        CornerRadius="{StaticResource ControlCornerRadius}"
-                                        Background="{StaticResource RaisedBrush}"
-                                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                                <Border x:Name="SearchShortcutHint" Grid.Column="2"
+                                        Margin="12,0,18,0" Padding="7,4"
+                                         HorizontalAlignment="Right" VerticalAlignment="Center"
+                                         CornerRadius="{StaticResource ControlCornerRadius}"
+                                         Background="{StaticResource RaisedBrush}"
+                                         BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <TextBlock Text="Ctrl K" FontSize="10"
                                                Foreground="{StaticResource MutedBrush}" />
                                 </Border>
+                                <Button x:Name="SearchClearButton" Grid.Column="2"
+                                        Width="24" Height="24" Margin="12,0,18,0" Padding="0"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Content="×" FontSize="15" FontWeight="SemiBold"
+                                        Background="{StaticResource RaisedBrush}"
+                                        AutomationProperties.Name="검색어 지우기"
+                                        ToolTip="검색어 지우기"
+                                        Click="OnClearSearch">
+                                    <Button.Style>
+                                        <Style TargetType="Button"
+                                               BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding SearchText}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
                             </Grid>
                         </Border>
 
