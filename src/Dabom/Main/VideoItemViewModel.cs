@@ -16,6 +16,7 @@ public sealed class VideoItemViewModel : ViewModelBase
     }
 
     public string Path { get; }
+    public string FileName => System.IO.Path.GetFileName(Path);
     public VideoRecord Record => _record;
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);
     public string OriginalTitle => _record.OriginalTitle ?? string.Empty;

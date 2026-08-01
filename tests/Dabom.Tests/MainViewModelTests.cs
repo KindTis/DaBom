@@ -292,6 +292,25 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void VideoItem_ExposesActualFileNameWithExtension()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-file-name-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movies\Movie.2024.mkv",
+                new VideoRecord(),
+                new LibraryStore(root.FullName));
+
+            Assert.AreEqual("Movie.2024.mkv", item.FileName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task ScanAsync_DefaultsToTitleAscending()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
