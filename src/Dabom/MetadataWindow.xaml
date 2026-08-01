@@ -1,12 +1,13 @@
 <Window x:Class="Dabom.MetadataWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:library="clr-namespace:Dabom.Library"
         Title="메타데이터 편집" Icon="Assets/Dabom.ico"
         Width="920" Height="760"
         MinWidth="760" MinHeight="620"
         Style="{StaticResource {x:Type Window}}"
         WindowStartupLocation="CenterOwner" Closing="OnClosing">
-    <Grid Margin="28" IsEnabled="{Binding IsNotSaving}">
+    <Grid Margin="28" IsEnabled="{Binding IsNotBusy}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260" />
             <ColumnDefinition Width="*" />
@@ -63,52 +64,174 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <TextBlock Text="파일 경로" Margin="0,9,12,9" />
-                <TextBox Grid.Column="1" Text="{Binding Path, Mode=OneWay}"
+                <Grid x:Name="SearchAnchor" Grid.ColumnSpan="2" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="SearchBox"
+                             Padding="9,7"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             KeyDown="OnSearchKeyDown" />
+                    <Button Grid.Column="1"
+                            Content="온라인 검색"
+                            Margin="8,0,0,0"
+                            Click="OnSearchClick" />
+
+                    <Popup x:Name="SearchResultsPopup"
+                           PlacementTarget="{Binding ElementName=SearchAnchor}"
+                           Placement="Bottom"
+                           StaysOpen="False"
+                           AllowsTransparency="True"
+                           IsOpen="{Binding IsSearchPopupOpen, Mode=TwoWay}"
+                           PreviewKeyDown="OnPopupKeyDown">
+                        <Border Width="{Binding ActualWidth, ElementName=SearchAnchor}"
+                                MaxHeight="420"
+                                Padding="8"
+                                Background="{StaticResource SurfaceBrush}"
+                                BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{StaticResource SurfaceCornerRadius}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ListBox x:Name="SearchResultsList"
+                                         MaxHeight="320"
+                                         ItemsSource="{Binding SearchCandidates}"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         PreviewMouseLeftButtonUp="OnSearchResultClick"
+                                         KeyDown="OnSearchResultsKeyDown">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="48" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <Image Width="40"
+                                                       Height="60"
+                                                       Source="{Binding PosterUri}"
+                                                       Stretch="UniformToFill" />
+                                                <StackPanel Grid.Column="1" Margin="8,0">
+                                                    <TextBlock Text="{Binding DisplayTitle}"
+                                                               FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding OriginalTitle}"
+                                                               Foreground="{StaticResource MutedBrush}" />
+                                                    <TextBlock Text="{Binding Year}"
+                                                               Foreground="{StaticResource MutedBrush}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="TV" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding MediaType}"
+                                                                             Value="{x:Static library:MediaType.Movie}">
+                                                                    <Setter Property="Text" Value="영화" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <StackPanel Grid.Row="1" Margin="4,8,4,0">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding PendingTvCandidate}"
+                                                             Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="시즌과 에피소드 번호를 입력하세요."
+                                               Margin="0,0,0,6" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox x:Name="SeasonNumberBox"
+                                                 Width="80"
+                                                 Text="{Binding SeasonNumberText, UpdateSourceTrigger=PropertyChanged}"
+                                                 KeyDown="OnEpisodeKeyDown" />
+                                        <TextBox x:Name="EpisodeNumberBox"
+                                                 Width="80"
+                                                 Margin="8,0,0,0"
+                                                 Text="{Binding EpisodeNumberText, UpdateSourceTrigger=PropertyChanged}"
+                                                 KeyDown="OnEpisodeKeyDown" />
+                                        <Button Content="회차 적용"
+                                                Margin="8,0,0,0"
+                                                IsEnabled="{Binding CanApplyTvEpisode}"
+                                                Click="OnApplyEpisode" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <TextBlock Grid.Row="2"
+                                           Text="{Binding ErrorMessage}"
+                                           Foreground="#FFE28B8B"
+                                           TextWrapping="Wrap"
+                                           Margin="4,8,4,0" />
+                            </Grid>
+                        </Border>
+                    </Popup>
+                </Grid>
+
+                <TextBlock Grid.Row="1" Text="파일 경로" Margin="0,9,12,9" />
+                <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Path, Mode=OneWay}"
                          IsReadOnly="True" Margin="0,3" Padding="9,7" />
 
-                <TextBlock Grid.Row="1" Text="제목" Margin="0,9,12,9" />
-                <TextBox Grid.Row="1" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="2" Text="제목" Margin="0,9,12,9" />
+                <TextBox x:Name="TitleBox" Grid.Row="2" Grid.Column="1"
+                         Margin="0,3" Padding="9,7"
                          Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="2" Text="원제" Margin="0,9,12,9" />
-                <TextBox Grid.Row="2" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="3" Text="원제" Margin="0,9,12,9" />
+                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding OriginalTitle, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="3" Text="개봉일" Margin="0,9,12,9" />
-                <DatePicker Grid.Row="3" Grid.Column="1" Margin="0,3"
+                <TextBlock Grid.Row="4" Text="개봉일" Margin="0,9,12,9" />
+                <DatePicker Grid.Row="4" Grid.Column="1" Margin="0,3"
                             SelectedDate="{Binding ReleaseDate, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="4" Text="감독" Margin="0,9,12,9" />
-                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="5" Text="감독" Margin="0,9,12,9" />
+                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding Director, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="5" Text="배우" Margin="0,9,12,9" />
-                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="6" Text="배우" Margin="0,9,12,9" />
+                <TextBox Grid.Row="6" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding ActorsText, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="쉼표로 구분" />
 
-                <TextBlock Grid.Row="6" Text="줄거리" Margin="0,9,12,9" />
-                <TextBox Grid.Row="6" Grid.Column="1" Height="150" Margin="0,3"
+                <TextBlock Grid.Row="7" Text="줄거리" Margin="0,9,12,9" />
+                <TextBox Grid.Row="7" Grid.Column="1" Height="150" Margin="0,3"
                          Padding="9,7" AcceptsReturn="True" TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
                          Text="{Binding Synopsis, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="7" Text="파일 크기" Margin="0,12,12,6" />
-                <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding FileSizeText}"
+                <TextBlock Grid.Row="8" Text="파일 크기" Margin="0,12,12,6" />
+                <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding FileSizeText}"
                            Margin="0,12,0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="8" Text="수정일" Margin="0,6,12,6" />
-                <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding ModifiedText}"
+                <TextBlock Grid.Row="9" Text="수정일" Margin="0,6,12,6" />
+                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding ModifiedText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="9" Text="재생시간" Margin="0,6,12,6" />
-                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding DurationText}"
+                <TextBlock Grid.Row="10" Text="재생시간" Margin="0,6,12,6" />
+                <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding DurationText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="10" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
+                <TextBlock Grid.Row="11" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
                            Foreground="#FFE28B8B" TextWrapping="Wrap" Margin="0,16,0,0" />
             </Grid>
         </ScrollViewer>

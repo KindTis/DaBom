@@ -449,6 +449,70 @@ public sealed class MainWindowMarkupTests
             "child.Clip = new RectangleGeometry(new Rect(child.RenderSize), radius, radius)");
     }
 
+    [TestMethod]
+    public void MetadataWindow_SearchResultsUseFloatingPopup()
+    {
+        var markup = ReadMetadataWindowMarkup();
+        var document = XDocument.Parse(markup);
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var popup = document
+            .Descendants(presentation + "Popup")
+            .Single(element =>
+                (string?)element.Attribute(x + "Name")
+                == "SearchResultsPopup");
+
+        Assert.AreEqual("Bottom", (string?)popup.Attribute("Placement"));
+        Assert.AreEqual("False", (string?)popup.Attribute("StaysOpen"));
+        StringAssert.Contains(
+            (string?)popup.Attribute("IsOpen"),
+            "IsSearchPopupOpen");
+        StringAssert.Contains(markup, "x:Name=\"SearchBox\"");
+        StringAssert.Contains(markup, "ItemsSource=\"{Binding SearchCandidates}\"");
+        StringAssert.Contains(markup, "MaxHeight=\"420\"");
+    }
+
+    [TestMethod]
+    public void MetadataWindow_SearchPopupShowsCandidateAndEpisodeInputs()
+    {
+        var markup = ReadMetadataWindowMarkup();
+
+        StringAssert.Contains(markup, "Source=\"{Binding PosterUri}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding DisplayTitle}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding OriginalTitle}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding Year}\"");
+        StringAssert.Contains(markup, "Value=\"영화\"");
+        StringAssert.Contains(markup, "Value=\"TV\"");
+        StringAssert.Contains(markup, "x:Name=\"SeasonNumberBox\"");
+        StringAssert.Contains(markup, "x:Name=\"EpisodeNumberBox\"");
+        StringAssert.Contains(markup, "Content=\"회차 적용\"");
+        StringAssert.Contains(markup, "IsEnabled=\"{Binding CanApplyTvEpisode}\"");
+    }
+
+    [TestMethod]
+    public void MetadataWindow_WiresSearchKeyboardAndFocusTransitions()
+    {
+        var markup = ReadMetadataWindowMarkup();
+        var code = ReadMetadataWindowCode();
+
+        StringAssert.Contains(markup, "KeyDown=\"OnSearchKeyDown\"");
+        StringAssert.Contains(markup, "KeyDown=\"OnSearchResultsKeyDown\"");
+        StringAssert.Contains(markup, "KeyDown=\"OnEpisodeKeyDown\"");
+        StringAssert.Contains(markup, "PreviewKeyDown=\"OnPopupKeyDown\"");
+        StringAssert.Contains(code, "SearchResultsList.SelectedIndex = 0;");
+        StringAssert.Contains(
+            code,
+            "if (viewModel.SearchCandidates.Count == 0)");
+        StringAssert.Contains(code, "SearchBox.Focus();");
+        StringAssert.Contains(code, "SeasonNumberBox.Focus();");
+        StringAssert.Contains(code, "TitleBox.Focus();");
+        StringAssert.Contains(code, "e.Key == Key.Escape");
+        StringAssert.Contains(code, "viewModel.IsSearchPopupOpen = false;");
+        StringAssert.Contains(code, "viewModel.CancelLookup();");
+    }
+
     private static string ReadMainWindowMarkup()
     {
         var path = Path.Combine(ProjectDirectory(), "MainWindow.xaml");
@@ -460,6 +524,16 @@ public sealed class MainWindowMarkupTests
 
     private static string ReadAboutWindowCode() =>
         File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml.cs"));
+
+    private static string ReadMetadataWindowMarkup() =>
+        File.ReadAllText(Path.Combine(
+            ProjectDirectory(),
+            "MetadataWindow.xaml"));
+
+    private static string ReadMetadataWindowCode() =>
+        File.ReadAllText(Path.Combine(
+            ProjectDirectory(),
+            "MetadataWindow.xaml.cs"));
 
     private static string ReadThemeMarkup()
     {
