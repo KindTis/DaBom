@@ -421,6 +421,115 @@
 
                         <StackPanel Grid.Column="2" Orientation="Horizontal"
                                     VerticalAlignment="Center">
+                            <ComboBox x:Name="FilterComboBox"
+                                      Width="148" Height="40" Margin="0,0,14,0"
+                                      ItemsSource="{Binding FilterOptions}"
+                                      SelectedItem="{Binding SelectedFilter}"
+                                      AutomationProperties.Name="{Binding FilterAutomationName}"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                <ComboBox.Style>
+                                    <Style TargetType="ComboBox"
+                                           BasedOn="{StaticResource ReferenceSortComboBoxStyle}">
+                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Foreground" Value="{StaticResource PageBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedFilter.Kind}"
+                                                         Value="{x:Static main:LibraryFilterKind.All}">
+                                                <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ComboBox.Style>
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem"
+                                           BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                        <Setter Property="AutomationProperties.Name"
+                                                Value="{Binding AutomationName}" />
+                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="1" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ComboBoxItem">
+                                                    <Border x:Name="FilterItemBorder"
+                                                            Padding="{TemplateBinding Padding}"
+                                                            CornerRadius="{StaticResource ControlCornerRadius}"
+                                                            Background="{TemplateBinding Background}"
+                                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                                            BorderThickness="{TemplateBinding BorderThickness}">
+                                                        <ContentPresenter />
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsHighlighted" Value="True">
+                                                            <Setter TargetName="FilterItemBorder"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource SurfaceBrush}" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="True">
+                                                            <Setter TargetName="FilterItemBorder"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource RaisedBrush}" />
+                                                            <Setter TargetName="FilterItemBorder"
+                                                                    Property="BorderBrush"
+                                                                    Value="{StaticResource AccentBrush}" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Setter Property="ContentTemplate">
+                                            <Setter.Value>
+                                                <DataTemplate DataType="{x:Type main:LibraryFilterOption}">
+                                                    <StackPanel>
+                                                        <StackPanel>
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding StartsGenreSection}"
+                                                                                     Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <Separator Margin="0,2,0,8" />
+                                                            <TextBlock Text="장르" Margin="4,0,4,6"
+                                                                       FontSize="10"
+                                                                       Foreground="{StaticResource MutedBrush}" />
+                                                        </StackPanel>
+                                                        <Grid MinWidth="210">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="20" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="✓" VerticalAlignment="Center">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ComboBoxItem}}"
+                                                                                         Value="True">
+                                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Label}"
+                                                                       Margin="4,0,18,0" />
+                                                            <TextBlock Grid.Column="2"
+                                                                       Text="{Binding Count, StringFormat={}{0}편}"
+                                                                       Foreground="{StaticResource MutedBrush}" />
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
                             <TextBlock Text="정렬" Margin="0,0,10,0"
                                        VerticalAlignment="Center"
                                        Foreground="{StaticResource MutedBrush}" />
@@ -549,6 +658,23 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+
+                <Border x:Name="FilterEmptyState" Grid.Row="3"
+                        MinHeight="260" Margin="0,30,0,0" Padding="40"
+                        CornerRadius="{StaticResource SurfaceCornerRadius}"
+                        Background="{StaticResource SurfaceBrush}"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1"
+                        Visibility="{Binding IsFilterEmptyStateVisible, Converter={StaticResource BoolToVisibility}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding FilterEmptyTitle}"
+                                   FontSize="24" FontWeight="SemiBold"
+                                   TextAlignment="Center" />
+                        <TextBlock Text="{Binding FilterEmptyGuidance}"
+                                   Margin="0,12,0,0"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   TextAlignment="Center" />
+                    </StackPanel>
+                </Border>
 
                 </Grid>
             </ScrollViewer>

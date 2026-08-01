@@ -126,6 +126,18 @@ public partial class MainWindow : Window
             SearchBox.Focus();
             e.Handled = true;
         }
+        else if (!FilterComboBox.IsDropDownOpen
+            && ReferenceEquals(e.OriginalSource, FilterComboBox)
+            && e.Key is Key.Enter or Key.Space)
+        {
+            FilterComboBox.IsDropDownOpen = true;
+            e.Handled = true;
+        }
+        else if (FilterComboBox.IsDropDownOpen
+            && e.Key is Key.Enter or Key.Escape)
+        {
+            return;
+        }
         else if (e.Key == Key.F1)
         {
             if (viewModel.CanMutateLibrary && viewModel.SelectedVideo is null)

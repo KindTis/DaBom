@@ -219,6 +219,71 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "AutomationProperties.Name=\"정렬\"");
     }
 
+    [TestMethod]
+    public void LibraryToolbar_FilterSitsBetweenSearchAndSortWithAccessibleCounts()
+    {
+        var markup = ReadMainWindowMarkup();
+        var search = markup.IndexOf("x:Name=\"SearchBox\"", StringComparison.Ordinal);
+        var filter = markup.IndexOf("x:Name=\"FilterComboBox\"", StringComparison.Ordinal);
+        var sort = markup.IndexOf("AutomationProperties.Name=\"정렬\"", StringComparison.Ordinal);
+
+        Assert.IsTrue(search >= 0 && filter > search && sort > filter);
+        StringAssert.Contains(markup, "ItemsSource=\"{Binding FilterOptions}\"");
+        StringAssert.Contains(markup, "SelectedItem=\"{Binding SelectedFilter}\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"{Binding FilterAutomationName}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding Count, StringFormat={}{0}편}\"");
+        StringAssert.Contains(markup, "Text=\"✓\"");
+        StringAssert.Contains(markup, "Property=\"AutomationProperties.Name\"");
+        StringAssert.Contains(markup, "Value=\"{Binding AutomationName}\"");
+    }
+
+    [TestMethod]
+    public void FilterDropDown_UsesOneBoundedScrollableListAndConditionalGenreHeader()
+    {
+        var markup = ReadMainWindowMarkup();
+        var theme = ReadThemeMarkup();
+
+        StringAssert.Contains(markup, "BasedOn=\"{StaticResource ReferenceSortComboBoxStyle}\"");
+        StringAssert.Contains(markup, "ScrollViewer.VerticalScrollBarVisibility=\"Auto\"");
+        StringAssert.Contains(markup, "Binding=\"{Binding StartsGenreSection}\"");
+        StringAssert.Contains(markup, "Text=\"장르\"");
+        var styleStart = theme.IndexOf(
+            "x:Key=\"ReferenceSortComboBoxStyle\"",
+            StringComparison.Ordinal);
+        var styleEnd = theme.IndexOf("</Style>", styleStart, StringComparison.Ordinal);
+        var style = theme[styleStart..styleEnd];
+        StringAssert.Contains(style, "MaxHeight=\"300\"");
+        StringAssert.Contains(style, "<ScrollViewer>");
+        Assert.AreEqual(
+            1,
+            style.Split("<ItemsPresenter />", StringSplitOptions.None).Length - 1);
+    }
+
+    [TestMethod]
+    public void FilterControl_ReusesExistingBrushesAndNativeComboBoxBehavior()
+    {
+        var markup = ReadMainWindowMarkup();
+        var code = ReadMainWindowCode();
+
+        StringAssert.Contains(markup, "Value=\"{StaticResource RaisedBrush}\"");
+        StringAssert.Contains(markup, "Value=\"{StaticResource AccentBrush}\"");
+        StringAssert.Contains(markup, "x:Name=\"FilterItemBorder\"");
+        StringAssert.Contains(code, "ReferenceEquals(e.OriginalSource, FilterComboBox)");
+        StringAssert.Contains(code, "e.Key is Key.Enter or Key.Space");
+        StringAssert.Contains(code, "e.Key is Key.Enter or Key.Escape");
+    }
+
+    [TestMethod]
+    public void FilterEmptyState_BindsOnlyFilterSpecificMessages()
+    {
+        var markup = ReadMainWindowMarkup();
+
+        StringAssert.Contains(markup, "x:Name=\"FilterEmptyState\"");
+        StringAssert.Contains(markup, "Visibility=\"{Binding IsFilterEmptyStateVisible, Converter={StaticResource BoolToVisibility}}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding FilterEmptyTitle}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding FilterEmptyGuidance}\"");
+    }
+
     [DataTestMethod]
     [DataRow(30d, 200d, 0d)]
     [DataRow(18d, 200d, 0d)]
