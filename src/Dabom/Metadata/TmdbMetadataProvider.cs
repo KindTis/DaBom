@@ -58,6 +58,62 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         MetadataQuery query,
         CancellationToken cancellationToken)
     {
+        if (query.MediaType == MediaType.Unknown)
+        {
+            var multiResponse = await SendJsonAsync<SearchResponse>(
+                $"search/multi?query={Uri.EscapeDataString(query.Title)}&language=ko-KR",
+                cancellationToken);
+            var multiResults = multiResponse.Results
+                ?? throw InvalidResponse("TMDB 검색 결과 형식이 올바르지 않습니다.");
+            var candidates = new List<MetadataCandidate>();
+            var canLoadPoster = true;
+
+            foreach (var result in multiResults.Where(result =>
+                result.MediaType is "movie" or "tv"))
+            {
+                if (result.Id <= 0)
+                {
+                    throw InvalidResponse("TMDB 검색 결과 ID가 올바르지 않습니다.");
+                }
+
+                var isMovie = result.MediaType == "movie";
+                var displayTitle = isMovie ? result.Title : result.Name;
+                if (string.IsNullOrWhiteSpace(displayTitle))
+                {
+                    throw InvalidResponse("TMDB 검색 결과 제목이 없습니다.");
+                }
+
+                Uri? posterUri = null;
+                if (canLoadPoster && !string.IsNullOrWhiteSpace(result.PosterPath))
+                {
+                    try
+                    {
+                        posterUri = await GetPosterUriAsync(
+                            result.PosterPath,
+                            cancellationToken);
+                    }
+                    catch (MetadataProviderException)
+                    {
+                        canLoadPoster = false;
+                    }
+                }
+
+                candidates.Add(new(
+                    ProviderKey,
+                    isMovie ? "movie" : "tv-series",
+                    result.Id.ToString(CultureInfo.InvariantCulture),
+                    isMovie ? MediaType.Movie : MediaType.TvEpisode,
+                    DisplayTitle: displayTitle.Trim(),
+                    OriginalTitle: NullIfWhiteSpace(
+                        isMovie ? result.OriginalTitle : result.OriginalName),
+                    Year: ParseDate(
+                        isMovie ? result.ReleaseDate : result.FirstAirDate)?.Year,
+                    PosterUri: posterUri));
+            }
+
+            return candidates;
+        }
+
         var escaped = Uri.EscapeDataString(query.Title);
         var path = query.MediaType switch
         {
@@ -623,6 +679,30 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     {
         [JsonPropertyName("id")]
         public int Id { get; init; }
+
+        [JsonPropertyName("media_type")]
+        public string? MediaType { get; init; }
+
+        [JsonPropertyName("title")]
+        public string? Title { get; init; }
+
+        [JsonPropertyName("original_title")]
+        public string? OriginalTitle { get; init; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("original_name")]
+        public string? OriginalName { get; init; }
+
+        [JsonPropertyName("release_date")]
+        public string? ReleaseDate { get; init; }
+
+        [JsonPropertyName("first_air_date")]
+        public string? FirstAirDate { get; init; }
+
+        [JsonPropertyName("poster_path")]
+        public string? PosterPath { get; init; }
     }
 
     private sealed record MovieDetailsResponse

@@ -15,7 +15,11 @@ public sealed record MetadataCandidate(
     string ResourceId,
     MediaType MediaType,
     int? SeasonNumber = null,
-    int? EpisodeNumber = null);
+    int? EpisodeNumber = null,
+    string? DisplayTitle = null,
+    string? OriginalTitle = null,
+    int? Year = null,
+    Uri? PosterUri = null);
 
 public enum MetadataProviderFailureKind
 {

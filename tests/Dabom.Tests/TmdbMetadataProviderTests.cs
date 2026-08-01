@@ -35,6 +35,107 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
+    public async Task SearchAsync_Unknown_MapsMovieAndTvAndSkipsUnsupportedResults()
+    {
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            Json("""
+                {
+                  "results": [
+                    {
+                      "id": 496243,
+                      "media_type": "movie",
+                      "title": "기생충",
+                      "original_title": "Parasite",
+                      "release_date": "2019-05-30",
+                      "poster_path": "/movie.jpg"
+                    },
+                    {
+                      "id": 1396,
+                      "media_type": "tv",
+                      "name": "브레이킹 배드",
+                      "original_name": "Breaking Bad",
+                      "first_air_date": "2008-01-20",
+                      "poster_path": null
+                    },
+                    {
+                      "id": 1,
+                      "media_type": "person",
+                      "name": "지원하지 않는 인물"
+                    }
+                  ]
+                }
+                """),
+            Json("""
+                {
+                  "images": {
+                    "secure_base_url": "https://image.tmdb.org/t/p/",
+                    "poster_sizes": ["w500"]
+                  }
+                }
+                """)
+        ]);
+        var handler = new RecordingHandler(_ => responses.Dequeue());
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var candidates = await provider.SearchAsync(
+            new(MediaType.Unknown, "기생충"),
+            CancellationToken.None);
+
+        Assert.AreEqual(2, candidates.Count);
+        Assert.AreEqual(MediaType.Movie, candidates[0].MediaType);
+        Assert.AreEqual("movie", candidates[0].ResourceType);
+        Assert.AreEqual("기생충", candidates[0].DisplayTitle);
+        Assert.AreEqual("Parasite", candidates[0].OriginalTitle);
+        Assert.AreEqual(2019, candidates[0].Year);
+        Assert.AreEqual(
+            "https://image.tmdb.org/t/p/w500/movie.jpg",
+            candidates[0].PosterUri!.AbsoluteUri);
+        Assert.AreEqual(MediaType.TvEpisode, candidates[1].MediaType);
+        Assert.AreEqual("tv-series", candidates[1].ResourceType);
+        Assert.AreEqual("브레이킹 배드", candidates[1].DisplayTitle);
+        Assert.AreEqual("Breaking Bad", candidates[1].OriginalTitle);
+        Assert.AreEqual(2008, candidates[1].Year);
+        CollectionAssert.AreEqual(
+            new[] { "/3/search/multi", "/3/configuration" },
+            RequestPaths(handler, includeQueryForSearch: false));
+    }
+
+    [TestMethod]
+    public async Task SearchAsync_Unknown_WhenConfigurationFails_ReturnsTextWithoutPoster()
+    {
+        var handler = new RecordingHandler(request =>
+            request.RequestUri!.AbsolutePath.EndsWith(
+                "/configuration",
+                StringComparison.Ordinal)
+                ? Json("{}", HttpStatusCode.ServiceUnavailable)
+                : Json("""
+                    {
+                      "results": [
+                        {
+                          "id": 496243,
+                          "media_type": "movie",
+                          "title": "기생충",
+                          "original_title": "Parasite",
+                          "release_date": "2019-05-30",
+                          "poster_path": "/movie.jpg"
+                        }
+                      ]
+                    }
+                    """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var candidate = (await provider.SearchAsync(
+            new(MediaType.Unknown, "기생충"),
+            CancellationToken.None)).Single();
+
+        Assert.AreEqual("기생충", candidate.DisplayTitle);
+        Assert.IsNull(candidate.PosterUri);
+    }
+
+    [TestMethod]
     public async Task GetDetailsAsync_MapsMovieAndRequestsCreditsBeforeConfiguration()
     {
         var responses = new Queue<HttpResponseMessage>(
