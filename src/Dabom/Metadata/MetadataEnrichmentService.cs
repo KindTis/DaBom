@@ -62,6 +62,111 @@ public sealed class MetadataEnrichmentService
         _delay = delay;
     }
 
+    public async Task<IReadOnlyList<MetadataCandidate>> SearchManualAsync(
+        string title,
+        CancellationToken cancellationToken)
+    {
+        var unavailableUntil =
+            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var deadline = _utcNow() + _itemBudget;
+        using var budget = new CancellationTokenSource(_itemBudget);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            budget.Token);
+        MetadataProviderException? failure = null;
+
+        foreach (var provider in _providers)
+        {
+            try
+            {
+                var candidates = await ExecuteProviderCallAsync(
+                    provider,
+                    token => provider.SearchAsync(
+                        new(MediaType.Unknown, title),
+                        token),
+                    deadline,
+                    unavailableUntil,
+                    linked.Token,
+                    cancellationToken);
+                if (candidates.Count > 0)
+                {
+                    return candidates;
+                }
+            }
+            catch (MetadataProviderException error)
+            {
+                failure ??= error;
+            }
+            catch (OperationCanceledException)
+                when (budget.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested)
+            {
+                failure ??= new(
+                    MetadataProviderFailureKind.Transient,
+                    "메타데이터 검색 시간이 초과되었습니다.");
+            }
+        }
+
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
+        return [];
+    }
+
+    public async Task<MetadataDetails> GetManualDetailsAsync(
+        MetadataCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        var provider = _providers.FirstOrDefault(provider =>
+            string.Equals(
+                provider.ProviderKey,
+                candidate.ProviderKey,
+                StringComparison.Ordinal))
+            ?? throw new MetadataProviderException(
+                MetadataProviderFailureKind.InvalidResponse,
+                "검색 후보를 제공한 메타데이터 공급자를 찾을 수 없습니다.");
+        var unavailableUntil =
+            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var deadline = _utcNow() + _itemBudget;
+        using var budget = new CancellationTokenSource(_itemBudget);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            budget.Token);
+
+        try
+        {
+            var details = await ExecuteProviderCallAsync(
+                provider,
+                token => provider.GetDetailsAsync(candidate, token),
+                deadline,
+                unavailableUntil,
+                linked.Token,
+                cancellationToken);
+            if (!IsComplete(provider, candidate.MediaType, details))
+            {
+                throw new MetadataProviderException(
+                    MetadataProviderFailureKind.InvalidResponse,
+                    "선택한 메타데이터 상세 정보가 완전하지 않습니다.");
+            }
+            return details;
+        }
+        catch (OperationCanceledException)
+            when (budget.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+        {
+            throw new MetadataProviderException(
+                MetadataProviderFailureKind.Transient,
+                "메타데이터 상세 조회 시간이 초과되었습니다.");
+        }
+    }
+
+    internal Task<string> DownloadPosterAsync(
+        Uri source,
+        CancellationToken cancellationToken) =>
+        _store.DownloadPosterAsync(_imageClient, source, cancellationToken);
+
     public async Task<MetadataRunSummary> EnrichAsync(
         IReadOnlyDictionary<string, VideoRecord> records,
         IReadOnlyCollection<string> currentPaths,
@@ -471,7 +576,7 @@ public sealed class MetadataEnrichmentService
             ? currentValue
             : fetchedValue;
 
-    private static string BuildEpisodeTitle(
+    internal static string BuildEpisodeTitle(
         string? seriesTitle,
         string? episodeTitle,
         int? seasonNumber,

@@ -705,6 +705,92 @@ public sealed class MetadataEnrichmentServiceTests
         Assert.AreEqual(1, summary.Matched);
     }
 
+    [TestMethod]
+    public async Task SearchManualAsync_UsesUnknownAndStopsAtFirstProviderWithResults()
+    {
+        MetadataQuery? received = null;
+        var empty = FakeProvider.Empty("empty");
+        var selected = new FakeProvider(
+            "selected",
+            (query, _) =>
+            {
+                received = query;
+                return Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [
+                    new(
+                        "selected",
+                        "movie",
+                        "1",
+                        MediaType.Movie,
+                        DisplayTitle: "선택")
+                ]);
+            },
+            (_, _) => Task.FromResult(MovieDetails("선택", "1", "selected")));
+        var unused = FakeProvider.Empty("unused");
+
+        var candidates = await CreateService(
+            empty,
+            selected,
+            unused).SearchManualAsync("검색어", CancellationToken.None);
+
+        Assert.AreEqual(MediaType.Unknown, received!.MediaType);
+        Assert.AreEqual("검색어", received.Title);
+        Assert.AreEqual(1, empty.SearchCalls);
+        Assert.AreEqual(1, selected.SearchCalls);
+        Assert.AreEqual(0, unused.SearchCalls);
+        Assert.AreEqual("selected", candidates.Single().ProviderKey);
+    }
+
+    [TestMethod]
+    public async Task SearchManualAsync_DistinguishesNoResultsFromProviderFailure()
+    {
+        var noResults = await CreateService(
+            FakeProvider.Empty("first"),
+            FakeProvider.Empty("second"))
+            .SearchManualAsync("없음", CancellationToken.None);
+
+        Assert.AreEqual(0, noResults.Count);
+
+        var error = new MetadataProviderException(
+            MetadataProviderFailureKind.Authentication,
+            "secret value must not escape");
+        var service = CreateService(
+            FakeProvider.Empty("empty"),
+            FakeProvider.Failing("failing", error));
+
+        var thrown = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => service.SearchManualAsync("오류", CancellationToken.None));
+        Assert.AreEqual(
+            MetadataProviderFailureKind.Authentication,
+            thrown.Kind);
+    }
+
+    [TestMethod]
+    public async Task GetManualDetailsAsync_UsesCandidateOwner()
+    {
+        var first = FakeProvider.Empty("first");
+        var owner = FakeProvider.WithMovie(
+            [new("owner", "movie", "7", MediaType.Movie)],
+            MovieDetails("소유 후보", "7", "owner"));
+        var service = CreateService(first, owner);
+
+        var details = await service.GetManualDetailsAsync(
+            new("owner", "movie", "7", MediaType.Movie),
+            CancellationToken.None);
+
+        Assert.AreEqual("소유 후보", details.Title);
+        Assert.AreEqual(0, first.DetailsCalls);
+        Assert.AreEqual(1, owner.DetailsCalls);
+
+        var missing = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => service.GetManualDetailsAsync(
+                new("missing", "movie", "7", MediaType.Movie),
+                CancellationToken.None));
+        Assert.AreEqual(
+            MetadataProviderFailureKind.InvalidResponse,
+            missing.Kind);
+    }
+
     private MetadataEnrichmentService CreateService(
         params IMetadataProvider[] providers) =>
         new(
