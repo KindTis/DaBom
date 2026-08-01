@@ -1,5 +1,8 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 
@@ -467,7 +470,7 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
-    public void CardPopup_FollowsPointerAndKeepsKeyboardPlacement()
+    public void CardPopup_FollowsPointer()
     {
         var markup = ReadMainWindowMarkup();
         var code = ReadMainWindowCode();
@@ -476,7 +479,42 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(code, "private void OnCardMove");
         StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.Custom;");
         StringAssert.Contains(code, "CardPopup.PlacementRectangle = new Rect(");
-        StringAssert.Contains(code, "CardPopup.Placement = PlacementMode.Right;");
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void CardPopup_DoesNotOpenForKeyboardFocus()
+    {
+        EnsureApplicationResources();
+        var window = new MainWindow();
+        try
+        {
+            var videoList = (ListBox)window.FindName("VideoList");
+            var card = new ListBoxItem
+            {
+                DataContext = new object(),
+                Style = videoList.ItemContainerStyle,
+            };
+            var popup = (Popup)window.FindName("CardPopup");
+            var focus = new KeyboardFocusChangedEventArgs(
+                Keyboard.PrimaryDevice,
+                Environment.TickCount,
+                null,
+                card)
+            {
+                RoutedEvent = Keyboard.GotKeyboardFocusEvent,
+            };
+
+            card.RaiseEvent(focus);
+
+            Assert.IsNull(
+                popup.DataContext,
+                "툴팁은 키보드 포커스로 대상을 선택하지 않아야 합니다.");
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [TestMethod]
@@ -597,6 +635,18 @@ public sealed class MainWindowMarkupTests
     {
         var path = Path.Combine(ProjectDirectory(), "MainWindow.xaml");
         return File.ReadAllText(path);
+    }
+
+    private static void EnsureApplicationResources()
+    {
+        var application = Application.Current ?? new Application();
+        if (application.TryFindResource("PageBrush") is not null) return;
+
+        application.Resources.MergedDictionaries.Add(
+            (ResourceDictionary)Application.LoadComponent(
+                new Uri(
+                    "/Dabom;component/Styles/DabomTheme.xaml",
+                    UriKind.Relative)));
     }
 
     private static string ReadAboutWindowMarkup() =>

@@ -19,7 +19,6 @@ public partial class MainWindow : Window
     private const double LibraryToolbarBaseline = 18d;
 
     private ListBoxItem? _hoveredCard;
-    private ListBoxItem? _focusedCard;
 
     public MainWindow()
     {
@@ -163,7 +162,6 @@ public partial class MainWindow : Window
             LocationsPopup.IsOpen = false;
             WarningsPopup.IsOpen = false;
             _hoveredCard = null;
-            _focusedCard = null;
             RefreshCardPopup();
             Keyboard.ClearFocus();
             e.Handled = true;
@@ -206,22 +204,14 @@ public partial class MainWindow : Window
 
     private void RefreshCardPopup()
     {
-        var activeCard = _hoveredCard ?? _focusedCard;
-        if (activeCard is null)
+        if (_hoveredCard is null)
         {
             CardPopup.IsOpen = false;
             return;
         }
 
-        CardPopup.PlacementTarget = activeCard;
-        if (_hoveredCard is null)
-        {
-            CardPopup.Placement = PlacementMode.Right;
-            CardPopup.PlacementRectangle = Rect.Empty;
-            CardPopup.HorizontalOffset = 12;
-            CardPopup.VerticalOffset = 0;
-        }
-        CardPopup.DataContext = activeCard.DataContext;
+        CardPopup.PlacementTarget = _hoveredCard;
+        CardPopup.DataContext = _hoveredCard.DataContext;
         CardPopup.IsOpen = true;
         MakeCardPopupClickThrough();
     }
@@ -282,21 +272,9 @@ public partial class MainWindow : Window
         new(new Point(-popupSize.Width - 24, -popupSize.Height - 8), PopupPrimaryAxis.Vertical),
     ];
 
-    private void OnCardFocus(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        _focusedCard = (ListBoxItem)sender;
-        RefreshCardPopup();
-    }
-
     private void OnCardLeave(object sender, MouseEventArgs e)
     {
         if (ReferenceEquals(_hoveredCard, sender)) _hoveredCard = null;
-        RefreshCardPopup();
-    }
-
-    private void OnCardBlur(object sender, KeyboardFocusChangedEventArgs e)
-    {
-        if (ReferenceEquals(_focusedCard, sender)) _focusedCard = null;
         RefreshCardPopup();
     }
 

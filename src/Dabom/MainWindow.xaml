@@ -597,8 +597,6 @@
                             <EventSetter Event="MouseEnter" Handler="OnCardEnter" />
                             <EventSetter Event="MouseMove" Handler="OnCardMove" />
                             <EventSetter Event="MouseLeave" Handler="OnCardLeave" />
-                            <EventSetter Event="GotKeyboardFocus" Handler="OnCardFocus" />
-                            <EventSetter Event="LostKeyboardFocus" Handler="OnCardBlur" />
                         </Style>
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemsPanel>
