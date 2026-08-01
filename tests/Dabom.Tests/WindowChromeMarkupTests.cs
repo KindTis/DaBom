@@ -1,8 +1,11 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace Dabom.Tests;
@@ -10,6 +13,48 @@ namespace Dabom.Tests;
 [TestClass]
 public sealed class WindowChromeMarkupTests
 {
+    [STATestMethod]
+    public void SharedDatePickerStyle_UsesDarkInteractiveSurface()
+    {
+        var theme = (ResourceDictionary)Application.LoadComponent(
+            new Uri(
+                "/Dabom;component/Styles/DabomTheme.xaml",
+                UriKind.Relative));
+
+        Assert.IsTrue(
+            theme.Contains(typeof(DatePicker)),
+            "공통 테마에 DatePicker 스타일이 필요합니다.");
+        var picker = new DatePicker
+        {
+            Style = (Style)theme[typeof(DatePicker)],
+            SelectedDate = new DateTime(2026, 7, 27)
+        };
+
+        Assert.IsTrue(picker.ApplyTemplate());
+        var border = picker.Template.FindName("DatePickerBorder", picker) as Border;
+        var textBox = picker.Template.FindName("PART_TextBox", picker)
+            as DatePickerTextBox;
+        var button = picker.Template.FindName("PART_Button", picker) as Button;
+        var calendar = new Calendar { Style = picker.CalendarStyle };
+
+        Assert.IsNotNull(border);
+        Assert.IsNotNull(textBox);
+        Assert.IsNotNull(button);
+        Assert.IsNotNull(picker.CalendarStyle);
+        Assert.AreEqual(
+            Color.FromArgb(0xB8, 0x14, 0x15, 0x16),
+            ((SolidColorBrush)border.Background).Color);
+        Assert.AreEqual(Colors.Transparent, ((SolidColorBrush)textBox.Background).Color);
+        Assert.AreEqual(
+            Color.FromRgb(0xE7, 0xE5, 0xDF),
+            ((SolidColorBrush)textBox.Foreground).Color);
+        Assert.AreEqual(Colors.Transparent, ((SolidColorBrush)button.Background).Color);
+        Assert.AreEqual("달력 열기", AutomationProperties.GetName(button));
+        Assert.AreEqual(
+            Color.FromRgb(0x2A, 0x2B, 0x2D),
+            ((SolidColorBrush)calendar.Background).Color);
+    }
+
     [TestMethod]
     public void VerticalScrollBar_UsesCompactSharedTemplateWithoutChangingHorizontal()
     {
