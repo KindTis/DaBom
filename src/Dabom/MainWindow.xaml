@@ -421,6 +421,9 @@
 
                         <StackPanel Grid.Column="2" Orientation="Horizontal"
                                     VerticalAlignment="Center">
+                            <TextBlock Text="필터" Margin="0,0,10,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource MutedBrush}" />
                             <ComboBox x:Name="FilterComboBox"
                                       Width="148" Height="40" Margin="0,0,14,0"
                                       ItemsSource="{Binding FilterOptions}"
@@ -438,6 +441,9 @@
                                                 <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
                                                 <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
                                             </DataTrigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                            </Trigger>
                                         </Style.Triggers>
                                     </Style>
                                 </ComboBox.Style>

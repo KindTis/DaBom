@@ -28,9 +28,8 @@ public sealed record LibraryFilterOption(
         _ => Genre ?? string.Empty
     };
 
-    public string ButtonText => Kind == LibraryFilterKind.All ? "필터" : Label;
     public string AutomationName => $"{Label}, {Count}편";
-    public override string ToString() => ButtonText;
+    public override string ToString() => Label;
 }
 
 public sealed class MainViewModel : ViewModelBase

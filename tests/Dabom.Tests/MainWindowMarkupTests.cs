@@ -224,10 +224,13 @@ public sealed class MainWindowMarkupTests
     {
         var markup = ReadMainWindowMarkup();
         var search = markup.IndexOf("x:Name=\"SearchBox\"", StringComparison.Ordinal);
+        var filterLabel = markup.IndexOf("<TextBlock Text=\"필터\"", search, StringComparison.Ordinal);
         var filter = markup.IndexOf("x:Name=\"FilterComboBox\"", StringComparison.Ordinal);
         var sort = markup.IndexOf("AutomationProperties.Name=\"정렬\"", StringComparison.Ordinal);
 
-        Assert.IsTrue(search >= 0 && filter > search && sort > filter);
+        Assert.IsTrue(search >= 0 && filterLabel > search && filter > filterLabel && sort > filter);
+        StringAssert.Contains(markup[filterLabel..filter], "Margin=\"0,0,10,0\"");
+        StringAssert.Contains(markup[filterLabel..filter], "Foreground=\"{StaticResource MutedBrush}\"");
         StringAssert.Contains(markup, "ItemsSource=\"{Binding FilterOptions}\"");
         StringAssert.Contains(markup, "SelectedItem=\"{Binding SelectedFilter}\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"{Binding FilterAutomationName}\"");
@@ -264,9 +267,21 @@ public sealed class MainWindowMarkupTests
     {
         var markup = ReadMainWindowMarkup();
         var code = ReadMainWindowCode();
+        var filter = markup.IndexOf("x:Name=\"FilterComboBox\"", StringComparison.Ordinal);
+        var styleStart = markup.IndexOf("<ComboBox.Style>", filter, StringComparison.Ordinal);
+        var styleEnd = markup.IndexOf("</ComboBox.Style>", styleStart, StringComparison.Ordinal);
+        var hoverStart = markup.IndexOf(
+            "<Trigger Property=\"IsMouseOver\" Value=\"True\">",
+            styleStart,
+            StringComparison.Ordinal);
+        var hoverEnd = markup.IndexOf("</Trigger>", hoverStart, StringComparison.Ordinal);
 
         StringAssert.Contains(markup, "Value=\"{StaticResource RaisedBrush}\"");
         StringAssert.Contains(markup, "Value=\"{StaticResource AccentBrush}\"");
+        Assert.IsTrue(hoverStart > styleStart && hoverEnd < styleEnd);
+        StringAssert.Contains(
+            markup[hoverStart..hoverEnd],
+            "<Setter Property=\"Foreground\" Value=\"{StaticResource TextBrush}\" />");
         StringAssert.Contains(markup, "x:Name=\"FilterItemBorder\"");
         StringAssert.Contains(code, "ReferenceEquals(e.OriginalSource, FilterComboBox)");
         StringAssert.Contains(code, "e.Key is Key.Enter or Key.Space");

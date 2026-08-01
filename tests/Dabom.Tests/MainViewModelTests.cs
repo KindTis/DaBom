@@ -79,7 +79,7 @@ public sealed class MainViewModelTests
 
             await vm.ScanAsync();
 
-            Assert.AreEqual("필터", vm.SelectedFilter!.ButtonText);
+            Assert.AreEqual("전체 영상", vm.SelectedFilter!.ToString());
             Assert.AreEqual("영상 필터: 전체 영상", vm.FilterAutomationName);
             var genres = vm.FilterOptions
                 .Where(option => option.Kind == LibraryFilterKind.Genre)
