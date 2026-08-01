@@ -33,9 +33,25 @@ public partial class MetadataWindow : Window
     private async void OnSearchClick(object sender, RoutedEventArgs e) =>
         await RunSearchAsync();
 
+    private void OnClearSearch(object sender, RoutedEventArgs e) => ClearSearch();
+
+    private void ClearSearch()
+    {
+        var viewModel = (MetadataEditorViewModel)DataContext;
+        viewModel.SearchText = string.Empty;
+        viewModel.IsSearchPopupOpen = false;
+        SearchBox.Focus();
+    }
+
     private async void OnSearchKeyDown(object sender, KeyEventArgs e)
     {
         var viewModel = (MetadataEditorViewModel)DataContext;
+        if (e.Key == Key.Escape && !string.IsNullOrEmpty(viewModel.SearchText))
+        {
+            e.Handled = true;
+            ClearSearch();
+            return;
+        }
         if (e.Key == Key.Escape && viewModel.IsSearchPopupOpen)
         {
             e.Handled = true;

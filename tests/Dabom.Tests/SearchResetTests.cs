@@ -1,5 +1,6 @@
 using Dabom.Library;
 using Dabom.Main;
+using Dabom.Metadata;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -19,13 +20,7 @@ public sealed class SearchResetTests
     {
         EnsureApplicationResources();
         var root = Directory.CreateTempSubdirectory("dabom-search-reset-");
-        var viewModel = new MainViewModel(
-            new LibraryStore(root.FullName),
-            new EmptyScanner(),
-            new LibraryData(),
-            _ => true,
-            () => DateTimeOffset.UtcNow,
-            _ => 0);
+        var viewModel = CreateMainViewModel(root.FullName);
         var window = new MainWindow { DataContext = viewModel };
         try
         {
@@ -65,23 +60,9 @@ public sealed class SearchResetTests
     {
         EnsureApplicationResources();
         var root = Directory.CreateTempSubdirectory("dabom-search-escape-");
-        var viewModel = new MainViewModel(
-            new LibraryStore(root.FullName),
-            new EmptyScanner(),
-            new LibraryData(),
-            _ => true,
-            () => DateTimeOffset.UtcNow,
-            _ => 0);
+        var viewModel = CreateMainViewModel(root.FullName);
         var window = new MainWindow { DataContext = viewModel };
-        using var inputSource = new HwndSource(new HwndSourceParameters
-        {
-            WindowName = "DabomSearchResetTest",
-            WindowStyle = 0,
-            Width = 1,
-            Height = 1,
-            PositionX = -32000,
-            PositionY = -32000
-        });
+        using var inputSource = CreateInputSource("DabomSearchResetTest");
         try
         {
             Pump(window);
@@ -108,6 +89,73 @@ public sealed class SearchResetTests
         {
             window.Close();
             root.Delete(true);
+        }
+    }
+
+    [STATestMethod]
+    public void MetadataSearch_ClearButtonClosesResultsAndPreservesEdits()
+    {
+        EnsureApplicationResources();
+        var viewModel = CreateMetadataEditor();
+        var window = new MetadataWindow { DataContext = viewModel };
+        try
+        {
+            Pump(window);
+            var clearButton = window.FindName("SearchClearButton") as Button;
+            Assert.IsNotNull(clearButton);
+            Assert.AreEqual("검색어 지우기", AutomationProperties.GetName(clearButton));
+            Assert.AreEqual("검색어 지우기", clearButton.ToolTip);
+            Assert.AreEqual(Visibility.Visible, clearButton.Visibility);
+
+            viewModel.Title = "사용자 편집 제목";
+            viewModel.IsSearchPopupOpen = true;
+            clearButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Pump(window);
+
+            Assert.AreEqual(string.Empty, viewModel.SearchText);
+            Assert.IsFalse(viewModel.IsSearchPopupOpen);
+            Assert.AreEqual("사용자 편집 제목", viewModel.Title);
+            Assert.AreEqual(Visibility.Collapsed, clearButton.Visibility);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [STATestMethod]
+    public void MetadataSearch_EscapeClearsOnlyWhenRaisedFromSearchBox()
+    {
+        EnsureApplicationResources();
+        var viewModel = CreateMetadataEditor();
+        var window = new MetadataWindow { DataContext = viewModel };
+        using var inputSource = CreateInputSource("DabomMetadataSearchResetTest");
+        try
+        {
+            Pump(window);
+            var searchBox = window.FindName("SearchBox") as TextBox;
+            var titleBox = window.FindName("TitleBox") as TextBox;
+            Assert.IsNotNull(searchBox);
+            Assert.IsNotNull(titleBox);
+
+            viewModel.IsSearchPopupOpen = true;
+            var fromSearch = RaiseEscape(
+                searchBox,
+                Keyboard.KeyDownEvent,
+                inputSource);
+
+            Assert.IsTrue(fromSearch.Handled);
+            Assert.AreEqual(string.Empty, viewModel.SearchText);
+            Assert.IsFalse(viewModel.IsSearchPopupOpen);
+
+            viewModel.SearchText = "유지할 검색어";
+            RaiseEscape(titleBox, Keyboard.KeyDownEvent, inputSource);
+
+            Assert.AreEqual("유지할 검색어", viewModel.SearchText);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -147,6 +195,31 @@ public sealed class SearchResetTests
         target.RaiseEvent(args);
         return args;
     }
+
+    private static HwndSource CreateInputSource(string name) => new(
+        new HwndSourceParameters
+        {
+            WindowName = name,
+            WindowStyle = 0,
+            Width = 1,
+            Height = 1,
+            PositionX = -32000,
+            PositionY = -32000
+        });
+
+    private static MainViewModel CreateMainViewModel(string root) => new(
+        new LibraryStore(root),
+        new EmptyScanner(),
+        new LibraryData(),
+        _ => true,
+        () => DateTimeOffset.UtcNow,
+        _ => 0);
+
+    private static MetadataEditorViewModel CreateMetadataEditor() => new(
+        @"C:\Movie.mkv",
+        new VideoRecord { Title = "기생충" },
+        null,
+        (_, _) => Task.FromResult<string?>(null));
 
     private sealed class EmptyScanner : ILibraryScanner
     {

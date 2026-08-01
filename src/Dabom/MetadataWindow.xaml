@@ -72,10 +72,35 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="SearchBox"
-                             Padding="9,7"
-                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                             KeyDown="OnSearchKeyDown" />
+                    <Grid>
+                        <TextBox x:Name="SearchBox"
+                                 Padding="9,7,38,7"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 KeyDown="OnSearchKeyDown" />
+                        <Button x:Name="SearchClearButton"
+                                Width="24" Height="24" Margin="0,0,8,0" Padding="0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Content="×" FontSize="15" FontWeight="SemiBold"
+                                Background="{StaticResource RaisedBrush}"
+                                AutomationProperties.Name="검색어 지우기"
+                                ToolTip="검색어 지우기"
+                                Click="OnClearSearch">
+                            <Button.Style>
+                                <Style TargetType="Button"
+                                       BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SearchText}" Value="">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SearchText}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </Grid>
                     <Button Grid.Column="1"
                             Content="온라인 검색"
                             Margin="8,0,0,0"
