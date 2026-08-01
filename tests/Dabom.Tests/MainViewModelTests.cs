@@ -2,6 +2,7 @@ using Dabom.Library;
 using Dabom.Main;
 using Dabom.Metadata;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Windows.Media;
@@ -1026,6 +1027,528 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task CreateMetadataEditor_InjectsManualLookupCallbacks()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-manual-callbacks-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            var candidate = new MetadataCandidate(
+                "test", "movie", "1", MediaType.Movie);
+            var provider = new TestProvider(
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                    [candidate]),
+                (_, _) => Task.FromResult(MovieDetails("검색 결과", "1")));
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+            await vm.ScanAsync();
+            vm.SelectedVideo = vm.Videos.Single();
+            var editor = vm.CreateMetadataEditor();
+            Assert.IsNotNull(editor);
+            editor.SearchText = "검색";
+
+            Assert.IsTrue(await editor.SearchAsync());
+            Assert.AreEqual("검색", provider.LastQuery!.Title);
+            Assert.AreEqual(MediaType.Unknown, provider.LastQuery.MediaType);
+            Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+            Assert.AreSame(candidate, provider.LastCandidate);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void MetadataSave_SelectedResultReplacesProviderStateAndTracksOnlyLaterEdits()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-selected-save-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "이전 제목",
+                    Genres = ["보호 장르"],
+                    Poster = "posters/old.png",
+                    MetadataStatus = MetadataStatus.Failed,
+                    ProviderReferences = [new("old", "movie", "old")],
+                    UserEditedFields =
+                    [
+                        MetadataField.Title,
+                        MetadataField.Genres,
+                        MetadataField.Poster
+                    ]
+                };
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails("선택 제목", "1")));
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.SearchText = "선택";
+
+                Assert.IsTrue(await editor.SearchAsync());
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+                editor.Synopsis = "사용자 줄거리";
+
+                var saved = await editor.SaveAsync();
+                var updated = vm.Videos.Single().Record;
+                var reloaded = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+
+                Assert.IsTrue(saved);
+                Assert.AreEqual(MetadataStatus.Matched, updated.MetadataStatus);
+                Assert.AreEqual(MediaType.Movie, updated.MediaType);
+                CollectionAssert.AreEqual(new[] { "드라마" }, updated.Genres);
+                Assert.AreEqual(
+                    "test",
+                    updated.ProviderReferences.Single().ProviderKey);
+                CollectionAssert.AreEquivalent(
+                    new[] { MetadataField.Synopsis },
+                    updated.UserEditedFields.ToArray());
+                var persisted = reloaded.VideosByPath[path];
+                Assert.AreEqual(updated.Title, persisted.Title);
+                Assert.AreEqual(updated.MetadataStatus, persisted.MetadataStatus);
+                Assert.AreEqual(
+                    updated.ProviderReferences.Single(),
+                    persisted.ProviderReferences.Single());
+                CollectionAssert.AreEquivalent(
+                    updated.UserEditedFields.ToArray(),
+                    persisted.UserEditedFields.ToArray());
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_SelectedTvEpisodePersistsStructuredValuesAndReferences()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-tv-save-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Episode.mkv");
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "기존 제목",
+                    MetadataStatus = MetadataStatus.NotFound
+                };
+                var candidate = new MetadataCandidate(
+                    "test",
+                    "tv-series",
+                    "series-2",
+                    MediaType.TvEpisode,
+                    DisplayTitle: "시리즈");
+                var references = new[]
+                {
+                    new ProviderReference("test", "tv-series", "series-2"),
+                    new ProviderReference("test", "tv-episode", "episode-20")
+                };
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (value, _) => Task.FromResult(new MetadataDetails(
+                        MediaType: MediaType.TvEpisode,
+                        Title: null,
+                        OriginalTitle: "Series",
+                        SeriesTitle: "시리즈",
+                        EpisodeTitle: "회차",
+                        ReleaseDate: new DateOnly(2024, 2, 3),
+                        Genres: ["드라마"],
+                        Director: "감독",
+                        Actors: ["배우"],
+                        Synopsis: "줄거리",
+                        SeasonNumber: value.SeasonNumber,
+                        EpisodeNumber: value.EpisodeNumber,
+                        PosterUri: null,
+                        ProviderReferences: references)));
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                editor.SearchText = "시리즈";
+
+                Assert.IsTrue(await editor.SearchAsync());
+                Assert.IsFalse(await editor.SelectCandidateAsync(candidate));
+                editor.SeasonNumberText = "2";
+                editor.EpisodeNumberText = "3";
+                Assert.IsTrue(await editor.ApplyTvEpisodeAsync());
+                Assert.IsTrue(await editor.SaveAsync());
+
+                var updated = vm.Videos.Single().Record;
+                var persisted = (await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None)).VideosByPath[path];
+                foreach (var record in new[] { updated, persisted })
+                {
+                    Assert.AreEqual(MetadataStatus.Matched, record.MetadataStatus);
+                    Assert.AreEqual(MediaType.TvEpisode, record.MediaType);
+                    Assert.AreEqual("시리즈 S02E03 · 회차", record.Title);
+                    Assert.AreEqual("시리즈", record.SeriesTitle);
+                    Assert.AreEqual("회차", record.EpisodeTitle);
+                    Assert.AreEqual(2, record.SeasonNumber);
+                    Assert.AreEqual(3, record.EpisodeNumber);
+                    CollectionAssert.AreEqual(
+                        new[] { "드라마" },
+                        record.Genres);
+                    CollectionAssert.AreEqual(
+                        references,
+                        record.ProviderReferences);
+                    Assert.AreEqual(0, record.UserEditedFields.Count);
+                }
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_DownloadsSelectedRemotePosterOnlyWhenSaving()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-remote-poster-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(sourcePoster);
+                var posterUri = new Uri("https://image.tmdb.org/remote.png");
+                var handler = new ResponseHandler(_ => new(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                });
+                using var imageClient = new HttpClient(handler);
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(
+                        MovieDetails("선택 제목", "1", posterUri)));
+                var data = CachedData(root.FullName, path);
+                var store = new LibraryStore(root.FullName);
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+                Assert.AreEqual(0, handler.Calls);
+                var postersPath = Path.Combine(root.FullName, "posters");
+                Assert.IsFalse(Directory.Exists(postersPath));
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.AreEqual(1, handler.Calls);
+                var poster = vm.Videos.Single().Record.Poster;
+                StringAssert.StartsWith(poster, "posters/");
+                Assert.IsTrue(File.Exists(store.ResolvePosterPath(poster)));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_LocalPosterOverridesSelectedRemotePoster()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-local-priority-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var localPoster = Path.Combine(root.FullName, "local.png");
+                WritePng(localPoster);
+                var handler = new ResponseHandler(_ => new(HttpStatusCode.OK));
+                using var imageClient = new HttpClient(handler);
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails(
+                        "선택 제목",
+                        "1",
+                        new Uri("https://image.tmdb.org/remote.png"))));
+                var data = CachedData(root.FullName, path);
+                var store = new LibraryStore(root.FullName);
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+
+                editor.ChoosePoster(localPoster);
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.AreEqual(0, handler.Calls);
+                var updated = vm.Videos.Single().Record;
+                Assert.IsTrue(File.Exists(store.ResolvePosterPath(updated.Poster)));
+                Assert.IsTrue(
+                    updated.UserEditedFields.Contains(MetadataField.Poster));
+                Assert.AreEqual(MetadataStatus.Matched, updated.MetadataStatus);
+                Assert.AreEqual(
+                    "test",
+                    updated.ProviderReferences.Single().ProviderKey);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_RemovedPosterOverridesSelectedRemotePoster()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-remove-priority-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var posters = Directory.CreateDirectory(
+                    Path.Combine(root.FullName, "posters"));
+                WritePng(Path.Combine(posters.FullName, "old.png"));
+                var handler = new ResponseHandler(_ => new(HttpStatusCode.OK));
+                using var imageClient = new HttpClient(handler);
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails(
+                        "선택 제목",
+                        "1",
+                        new Uri("https://image.tmdb.org/remote.png"))));
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Poster = "posters/old.png"
+                };
+                var store = new LibraryStore(root.FullName);
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+
+                editor.MarkPosterRemoved();
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.AreEqual(0, handler.Calls);
+                var updated = vm.Videos.Single().Record;
+                Assert.IsNull(updated.Poster);
+                Assert.IsTrue(
+                    updated.UserEditedFields.Contains(MetadataField.Poster));
+                Assert.AreEqual(MetadataStatus.Matched, updated.MetadataStatus);
+                Assert.AreEqual(
+                    "test",
+                    updated.ProviderReferences.Single().ProviderKey);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_WhenRemotePosterFails_PreservesOldState()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-remote-failure-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var posters = Directory.CreateDirectory(
+                    Path.Combine(root.FullName, "posters"));
+                var oldPoster = Path.Combine(posters.FullName, "old.png");
+                WritePng(oldPoster);
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "이전 제목",
+                    Poster = "posters/old.png"
+                };
+                var normalStore = new LibraryStore(root.FullName);
+                await normalStore.SaveAsync(data);
+                var handler = new ResponseHandler(_ =>
+                    new(HttpStatusCode.ServiceUnavailable));
+                using var imageClient = new HttpClient(handler);
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails(
+                        "새 제목",
+                        "1",
+                        new Uri("https://image.tmdb.org/remote.png"))));
+                var vm = new MainViewModel(
+                    normalStore,
+                    new StubScanner(path),
+                    CreateEnrichment(normalStore, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+
+                Assert.IsFalse(await editor.SaveAsync());
+                Assert.AreEqual("이전 제목", vm.Videos.Single().Record.Title);
+                Assert.AreEqual(
+                    "posters/old.png",
+                    vm.Videos.Single().Record.Poster);
+                Assert.IsTrue(File.Exists(oldPoster));
+
+                var reloaded = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+                Assert.AreEqual("이전 제목", reloaded.VideosByPath[path].Title);
+                Assert.AreEqual(
+                    "posters/old.png",
+                    reloaded.VideosByPath[path].Poster);
+                Assert.AreEqual(
+                    1,
+                    Directory.EnumerateFiles(posters.FullName).Count());
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void MetadataSave_WhenRemotePosterJsonCommitFails_RollsBackNewPoster()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-remote-json-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var posters = Directory.CreateDirectory(
+                    Path.Combine(root.FullName, "posters"));
+                var oldPoster = Path.Combine(posters.FullName, "old.png");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(oldPoster);
+                WritePng(sourcePoster);
+                var data = CachedData(root.FullName, path);
+                data.VideosByPath[path] = data.VideosByPath[path] with
+                {
+                    Title = "이전 제목",
+                    Poster = "posters/old.png"
+                };
+                await new LibraryStore(root.FullName).SaveAsync(data);
+                var store = new LibraryStore(
+                    root.FullName,
+                    (_, _, _) => throw new IOException("disk full"));
+                var handler = new ResponseHandler(_ => new(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                });
+                using var imageClient = new HttpClient(handler);
+                var candidate = new MetadataCandidate(
+                    "test", "movie", "1", MediaType.Movie);
+                var provider = new TestProvider(
+                    (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                        [candidate]),
+                    (_, _) => Task.FromResult(MovieDetails(
+                        "새 제목",
+                        "1",
+                        new Uri("https://image.tmdb.org/remote.png"))));
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    data);
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var editor = vm.CreateMetadataEditor();
+                Assert.IsNotNull(editor);
+                Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+
+                Assert.IsFalse(await editor.SaveAsync());
+                Assert.AreEqual("이전 제목", vm.Videos.Single().Record.Title);
+                Assert.AreEqual(
+                    "posters/old.png",
+                    vm.Videos.Single().Record.Poster);
+                Assert.IsTrue(File.Exists(oldPoster));
+
+                var reloaded = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+                Assert.AreEqual("이전 제목", reloaded.VideosByPath[path].Title);
+                Assert.AreEqual(
+                    "posters/old.png",
+                    reloaded.VideosByPath[path].Poster);
+                Assert.AreEqual(
+                    1,
+                    Directory.EnumerateFiles(posters.FullName).Count());
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
     public async Task InitializeAsync_WithoutLocations_ShowsEmptyStateWithoutScanning()
     {
         var root = Directory.CreateTempSubdirectory("dabom-initialize-empty-");
@@ -1144,7 +1667,10 @@ public sealed class MainViewModelTests
         encoder.Save(stream);
     }
 
-    private static MetadataDetails MovieDetails(string title, string id) => new(
+    private static MetadataDetails MovieDetails(
+        string title,
+        string id,
+        Uri? posterUri = null) => new(
         MediaType: MediaType.Movie,
         Title: title,
         OriginalTitle: title,
@@ -1157,7 +1683,7 @@ public sealed class MainViewModelTests
         Synopsis: "줄거리",
         SeasonNumber: null,
         EpisodeNumber: null,
-        PosterUri: null,
+        PosterUri: posterUri,
         ProviderReferences: [new("test", "movie", id)]);
 
     private sealed class StubScanner(params string[] paths) : ILibraryScanner
@@ -1189,6 +1715,21 @@ public sealed class MainViewModelTests
             Task.FromResult(_results.Dequeue());
     }
 
+    private sealed class ResponseHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(respond(request));
+        }
+    }
+
     private sealed class TestProvider(
         Func<MetadataQuery, CancellationToken,
             Task<IReadOnlyList<MetadataCandidate>>> search,
@@ -1196,16 +1737,24 @@ public sealed class MainViewModelTests
         : IMetadataProvider
     {
         public string ProviderKey => "test";
+        public MetadataQuery? LastQuery { get; private set; }
+        public MetadataCandidate? LastCandidate { get; private set; }
 
         public Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
             MetadataQuery query,
-            CancellationToken cancellationToken) =>
-            search(query, cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            LastQuery = query;
+            return search(query, cancellationToken);
+        }
 
         public Task<MetadataDetails> GetDetailsAsync(
             MetadataCandidate candidate,
-            CancellationToken cancellationToken) =>
-            details(candidate, cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            LastCandidate = candidate;
+            return details(candidate, cancellationToken);
+        }
 
         internal static TestProvider ForMovie(MetadataDetails details) =>
             new(

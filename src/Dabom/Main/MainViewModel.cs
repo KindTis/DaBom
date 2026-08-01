@@ -420,105 +420,52 @@ public sealed class MainViewModel : ViewModelBase
                 SelectedVideo.Path,
                 SelectedVideo.Record,
                 SelectedVideo.Poster,
-                CommitMetadataAsync);
+                CommitMetadataAsync,
+                _metadataEnrichment is null
+                    ? null
+                    : _metadataEnrichment.SearchManualAsync,
+                _metadataEnrichment is null
+                    ? null
+                    : _metadataEnrichment.GetManualDetailsAsync);
 
     private async Task<string?> CommitMetadataAsync(
         MetadataEditorViewModel editor,
         CancellationToken cancellationToken)
     {
         string? newPoster = editor.OriginalRecord.Poster;
+        string? createdPoster = null;
         try
         {
             if (editor.SelectedPosterSourcePath is not null)
             {
-                newPoster = await _store.ImportPosterAsync(
+                createdPoster = await _store.ImportPosterAsync(
                     editor.Path, editor.SelectedPosterSourcePath, cancellationToken);
+                newPoster = createdPoster;
             }
             else if (editor.RemovePoster)
             {
                 newPoster = null;
             }
-
-            var title = NullIfWhiteSpace(editor.Title);
-            var originalTitle = NullIfWhiteSpace(editor.OriginalTitle);
-            DateOnly? releaseDate = editor.ReleaseDate is DateTime date
-                ? DateOnly.FromDateTime(date)
-                : null;
-            var director = NullIfWhiteSpace(editor.Director);
-            var actors = editor.ParsedActors();
-            var synopsis = NullIfWhiteSpace(editor.Synopsis);
-            var edited = new HashSet<MetadataField>(
-                editor.OriginalRecord.UserEditedFields);
-            if (!string.Equals(
-                editor.OriginalRecord.Title,
-                title,
-                StringComparison.Ordinal))
+            else if (editor.SelectedPosterUri is { } remotePoster)
             {
-                edited.Add(MetadataField.Title);
+                createdPoster = await _metadataEnrichment!.DownloadPosterAsync(
+                    remotePoster,
+                    cancellationToken);
+                newPoster = createdPoster;
             }
-            if (!string.Equals(
-                editor.OriginalRecord.OriginalTitle,
-                originalTitle,
-                StringComparison.Ordinal))
+            else if (editor.HasSelectedResult)
             {
-                edited.Add(MetadataField.OriginalTitle);
-            }
-            if (editor.OriginalRecord.ReleaseDate != releaseDate)
-            {
-                edited.Add(MetadataField.ReleaseDate);
-            }
-            if (!string.Equals(
-                editor.OriginalRecord.Director,
-                director,
-                StringComparison.Ordinal))
-            {
-                edited.Add(MetadataField.Director);
-            }
-            if (!editor.OriginalRecord.Actors.SequenceEqual(actors))
-            {
-                edited.Add(MetadataField.Actors);
-            }
-            if (!string.Equals(
-                editor.OriginalRecord.Synopsis,
-                synopsis,
-                StringComparison.Ordinal))
-            {
-                edited.Add(MetadataField.Synopsis);
-            }
-            if (!string.Equals(
-                editor.OriginalRecord.Poster,
-                newPoster,
-                StringComparison.OrdinalIgnoreCase))
-            {
-                edited.Add(MetadataField.Poster);
+                newPoster = null;
             }
 
-            var updated = editor.OriginalRecord with
-            {
-                Title = title,
-                OriginalTitle = originalTitle,
-                ReleaseDate = releaseDate,
-                Director = director,
-                Actors = actors,
-                Synopsis = synopsis,
-                Poster = newPoster,
-                UserEditedFields = edited
-            };
+            var updated = editor.BuildRecord(newPoster);
             var records = new Dictionary<string, VideoRecord>(
                 _data.VideosByPath, StringComparer.OrdinalIgnoreCase)
             {
                 [editor.Path] = updated
             };
             var next = _data with { VideosByPath = records };
-            await _store.SaveAsync(
-                next,
-                string.Equals(
-                    newPoster,
-                    editor.OriginalRecord.Poster,
-                    StringComparison.OrdinalIgnoreCase)
-                    ? null
-                    : newPoster,
-                cancellationToken);
+            await _store.SaveAsync(next, createdPoster, cancellationToken);
 
             _data = next;
             var video = Videos.Single(video =>
@@ -669,9 +616,6 @@ public sealed class MainViewModel : ViewModelBase
         : left.HasValue ? -1
         : right.HasValue ? 1
         : 0;
-
-    private static string? NullIfWhiteSpace(string value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static bool LaunchWithWindows(string path)
     {

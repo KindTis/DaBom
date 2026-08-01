@@ -896,6 +896,131 @@ public sealed class MetadataEditorViewModelTests
         Assert.AreEqual(tvPoster, editor.SelectedPosterUri);
     }
 
+    [TestMethod]
+    public async Task BuildRecord_SelectedMovieTracksOnlyLaterFieldEdits()
+    {
+        var candidate = new MetadataCandidate(
+            "test", "movie", "1", MediaType.Movie);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            new VideoRecord
+            {
+                Title = "원본",
+                Genres = ["보호 장르"],
+                Poster = "posters/old.png",
+                UserEditedFields =
+                [
+                    MetadataField.Title,
+                    MetadataField.Genres,
+                    MetadataField.Poster
+                ]
+            },
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            (_, _) => Task.FromResult(MovieDetails("선택 후보", "1")));
+
+        Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+        editor.Synopsis = "사용자 줄거리";
+
+        var record = editor.BuildRecord(null);
+
+        CollectionAssert.AreEquivalent(
+            new[] { MetadataField.Synopsis },
+            record.UserEditedFields.ToArray());
+        Assert.AreEqual(MetadataStatus.Matched, record.MetadataStatus);
+        Assert.AreEqual("1", record.ProviderReferences.Single().ResourceId);
+        CollectionAssert.AreEqual(new[] { "드라마" }, record.Genres);
+    }
+
+    [TestMethod]
+    public async Task BuildRecord_SecondCandidateResetsComparisonBaseline()
+    {
+        var first = new MetadataCandidate(
+            "test", "movie", "1", MediaType.Movie);
+        var second = new MetadataCandidate(
+            "test", "movie", "2", MediaType.Movie);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            new VideoRecord { Title = "원본" },
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([]),
+            (candidate, _) => Task.FromResult(
+                MovieDetails(
+                    candidate.ResourceId == "1"
+                        ? "첫 번째 후보"
+                        : "두 번째 후보",
+                    candidate.ResourceId)));
+
+        Assert.IsTrue(await editor.SelectCandidateAsync(first));
+        editor.Title = "사용자 제목";
+        Assert.IsTrue(await editor.SelectCandidateAsync(second));
+
+        var record = editor.BuildRecord(null);
+
+        Assert.AreEqual("두 번째 후보", record.Title);
+        Assert.AreEqual(0, record.UserEditedFields.Count);
+        Assert.AreEqual(
+            "2",
+            record.ProviderReferences.Single().ResourceId);
+    }
+
+    [TestMethod]
+    public async Task BuildRecord_SelectedPosterTracksOnlyExplicitLocalEdit()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-record-poster-");
+        try
+        {
+            var localPosterPath = Path.Combine(root.FullName, "local.png");
+            WritePng(localPosterPath);
+            var candidate = new MetadataCandidate(
+                "test", "movie", "1", MediaType.Movie);
+            var editor = new MetadataEditorViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord(),
+                null,
+                (_, _) => Task.FromResult<string?>(null),
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+                (_, _) => Task.FromResult(MovieDetails("선택 후보", "1")));
+            Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+
+            var remoteDefault = editor.BuildRecord("posters/remote.jpg");
+            Assert.IsFalse(
+                remoteDefault.UserEditedFields.Contains(MetadataField.Poster));
+
+            editor.MarkPosterRemoved();
+            var removed = editor.BuildRecord(null);
+            Assert.IsTrue(
+                removed.UserEditedFields.Contains(MetadataField.Poster));
+
+            editor.ChoosePoster(localPosterPath);
+            var chosen = editor.BuildRecord("posters/local.png");
+            Assert.IsTrue(
+                chosen.UserEditedFields.Contains(MetadataField.Poster));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    private static MetadataDetails MovieDetails(string title, string id) => new(
+        MediaType: MediaType.Movie,
+        Title: title,
+        OriginalTitle: title,
+        SeriesTitle: null,
+        EpisodeTitle: null,
+        ReleaseDate: new DateOnly(2024, 1, 2),
+        Genres: ["드라마"],
+        Director: "감독",
+        Actors: ["배우"],
+        Synopsis: "줄거리",
+        SeasonNumber: null,
+        EpisodeNumber: null,
+        PosterUri: new Uri("https://image.tmdb.org/poster.jpg"),
+        ProviderReferences: [new("test", "movie", id)]);
+
     private static void WritePng(string path)
     {
         var bitmap = BitmapSource.Create(

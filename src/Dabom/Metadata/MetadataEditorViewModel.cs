@@ -334,6 +334,82 @@ public sealed class MetadataEditorViewModel : ViewModelBase
 
     public void CancelLookup() => _lookupCancellation.Cancel();
 
+    internal VideoRecord BuildRecord(string? poster)
+    {
+        var baseline = _selectedBaseline ?? OriginalRecord;
+        var edited = _selectedBaseline is null
+            ? new HashSet<MetadataField>(OriginalRecord.UserEditedFields)
+            : [];
+        var title = NullIfWhiteSpace(Title);
+        var originalTitle = NullIfWhiteSpace(OriginalTitle);
+        DateOnly? releaseDate = ReleaseDate is DateTime date
+            ? DateOnly.FromDateTime(date)
+            : null;
+        var director = NullIfWhiteSpace(Director);
+        var actors = ParsedActors();
+        var synopsis = NullIfWhiteSpace(Synopsis);
+
+        if (!string.Equals(baseline.Title, title, StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.Title);
+        }
+        if (!string.Equals(
+                baseline.OriginalTitle,
+                originalTitle,
+                StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.OriginalTitle);
+        }
+        if (baseline.ReleaseDate != releaseDate)
+        {
+            edited.Add(MetadataField.ReleaseDate);
+        }
+        if (!string.Equals(
+                baseline.Director,
+                director,
+                StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.Director);
+        }
+        if (!baseline.Actors.SequenceEqual(actors))
+        {
+            edited.Add(MetadataField.Actors);
+        }
+        if (!string.Equals(
+                baseline.Synopsis,
+                synopsis,
+                StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.Synopsis);
+        }
+        if (_selectedBaseline is null)
+        {
+            if (!string.Equals(
+                    OriginalRecord.Poster,
+                    poster,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                edited.Add(MetadataField.Poster);
+            }
+        }
+        else if (SelectedPosterSourcePath is not null || RemovePoster)
+        {
+            edited.Add(MetadataField.Poster);
+        }
+
+        return baseline with
+        {
+            Title = title,
+            OriginalTitle = originalTitle,
+            ReleaseDate = releaseDate,
+            Director = director,
+            Actors = actors,
+            Synopsis = synopsis,
+            Poster = poster,
+            UserEditedFields = edited
+        };
+    }
+
     internal string[] ParsedActors() => ActorsText.Split(
         ',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
@@ -452,6 +528,9 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         value is > 0
             ? value.Value.ToString(CultureInfo.InvariantCulture)
             : string.Empty;
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string LookupError(MetadataProviderFailureKind kind) =>
         kind switch
