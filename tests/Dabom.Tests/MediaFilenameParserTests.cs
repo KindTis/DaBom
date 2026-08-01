@@ -27,6 +27,15 @@ public sealed class MediaFilenameParserTests
         "My.Movie.2024-NTb.mkv",
         MediaType.Movie, "My Movie", 2024, null, null)]
     [DataRow(
+        "Nobody.2.2025.Hybrid.2160p.WEB-DL.DV.HDR.DDP5.1.Atmos.H265-AOC.mkv",
+        MediaType.Movie, "Nobody 2", 2025, null, null)]
+    [DataRow(
+        "Thor.Ragnarok.2017.IMAX.2160p.DSNP.WEB-DL.x265.10bit.HDR.DTS-HD.MA.TrueHD.7.1.Atmos-SWTYBLZ.mkv",
+        MediaType.Movie, "Thor Ragnarok", 2017, null, null)]
+    [DataRow(
+        "Underworld.2003.UNRATED.1080p.BluRay.x264.DTS-FGT.mkv",
+        MediaType.Movie, "Underworld", 2003, null, null)]
+    [DataRow(
         "The.Mandalorian.S02E01.Chapter.16.The.Rescue.2160p.WEB-DL.DDP5.1.Atmos.HDR.x265-MZABI.mkv",
         MediaType.TvEpisode, "The Mandalorian", null, 2, 1)]
     [DataRow(

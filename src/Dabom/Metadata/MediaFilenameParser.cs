@@ -69,8 +69,7 @@ public sealed partial class MediaFilenameParser
             : int.Parse(years[^1].Groups["year"].Value);
         if (years.Count > 0)
         {
-            searchable = WhiteSpacePattern().Replace(
-                searchable.Remove(years[^1].Index, years[^1].Length), " ").Trim();
+            searchable = searchable[..years[^1].Index].Trim();
         }
 
         return HasSearchCharacter(searchable)
