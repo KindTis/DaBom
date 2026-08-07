@@ -585,6 +585,63 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void MainWindow_WiresSeasonEntryReturnAndVideoOnlyActions()
+    {
+        var markup = ReadMainWindowMarkup();
+        var code = ReadMainWindowCode();
+
+        StringAssert.Contains(markup, "Event=\"PreviewMouseLeftButtonUp\"");
+        StringAssert.Contains(markup, "Handler=\"OnCardClick\"");
+        StringAssert.Contains(markup, "Click=\"OnReturnToLibrary\"");
+        StringAssert.Contains(code, "item.DataContext is SeasonItemViewModel season");
+        StringAssert.Contains(code, "IsContinuationOfSeasonEntryClick(");
+        StringAssert.Contains(code, "viewModel.SelectedItem is SeasonItemViewModel season");
+        StringAssert.Contains(code, "item.DataContext is not VideoItemViewModel video");
+        StringAssert.Contains(
+            code,
+            "e.Key == Key.Escape && viewModel.IsSeasonView");
+        StringAssert.Contains(code, "viewModel.CloseSeason();");
+        StringAssert.Contains(code, "viewModel.NotifyMissingSelection();");
+    }
+
+    [DataTestMethod]
+    [DataRow(-20d, 100d, 600d, true)]
+    [DataRow(500d, 150d, 600d, true)]
+    [DataRow(-120d, 100d, 600d, false)]
+    [DataRow(600d, 100d, 600d, false)]
+    public void SeasonReturn_RecognizesViewportIntersection(
+        double top,
+        double height,
+        double viewportHeight,
+        bool expected)
+    {
+        Assert.AreEqual(
+            expected,
+            MainWindow.IntersectsViewport(top, height, viewportHeight));
+    }
+
+    [TestMethod]
+    public void SeasonEntryDoubleClick_DetectsOnlyTheSamePointerGesture()
+    {
+        var entry = new Point(40, 50);
+
+        Assert.IsTrue(MainWindow.IsContinuationOfSeasonEntryClick(
+            1_000, entry, 1_001, entry));
+        Assert.IsFalse(MainWindow.IsContinuationOfSeasonEntryClick(
+            1_000,
+            entry,
+            1_000 + MainWindow.DoubleClickTime + 1,
+            entry));
+        Assert.IsFalse(MainWindow.IsContinuationOfSeasonEntryClick(
+            1_000,
+            entry,
+            1_001,
+            new Point(
+                entry.X + MainWindow.DoubleClickWidth + 1,
+                entry.Y)));
+    }
+
+    [TestMethod]
     public void CardPopupPlacement_KeepsPointerOffsetAndUsesScreenEdgeFallbacks()
     {
         var placements = MainWindow.GetCardPopupPlacements(new Size(430, 600));

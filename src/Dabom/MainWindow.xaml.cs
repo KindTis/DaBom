@@ -1,5 +1,6 @@
 using Dabom.Main;
 using Dabom.Metadata;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -8,6 +9,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace Dabom;
 
@@ -17,8 +19,18 @@ public partial class MainWindow : Window
     private const long TransparentStyle = 0x20;
     private const long NoActivateStyle = 0x08000000;
     private const double LibraryToolbarBaseline = 18d;
+    private const int DoubleClickWidthMetric = 36;
+    private const int DoubleClickHeightMetric = 37;
 
     private ListBoxItem? _hoveredCard;
+    private SeasonGroupKey? _seasonReturnKey;
+    private double _seasonReturnOffset;
+    private int? _seasonEntryClickTimestamp;
+    private Point _seasonEntryClickPosition;
+
+    internal static int DoubleClickTime => unchecked((int)GetDoubleClickTime());
+    internal static double DoubleClickWidth => GetSystemMetrics(DoubleClickWidthMetric);
+    private static double DoubleClickHeight => GetSystemMetrics(DoubleClickHeightMetric);
 
     public MainWindow()
     {
@@ -32,10 +44,28 @@ public partial class MainWindow : Window
         if (e.OldValue is MainViewModel oldViewModel)
         {
             oldViewModel.MetadataEditRequested -= OnMetadataEditRequested;
+            oldViewModel.PropertyChanged -= OnViewModelPropertyChanged;
         }
         if (e.NewValue is MainViewModel newViewModel)
         {
             newViewModel.MetadataEditRequested += OnMetadataEditRequested;
+            newViewModel.PropertyChanged += OnViewModelPropertyChanged;
+        }
+        _seasonReturnKey = null;
+    }
+
+    private void OnViewModelPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.IsSeasonView)
+            && sender is MainViewModel viewModel
+            && !viewModel.IsSeasonView
+            && _seasonReturnKey is not null)
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Loaded,
+                () => RestoreSeasonReturn(viewModel));
         }
     }
 
@@ -88,13 +118,55 @@ public partial class MainWindow : Window
 
     private async void OnVideoDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        var entryTimestamp = _seasonEntryClickTimestamp;
+        _seasonEntryClickTimestamp = null;
+        if (entryTimestamp is { } timestamp
+            && IsContinuationOfSeasonEntryClick(
+                timestamp,
+                _seasonEntryClickPosition,
+                e.Timestamp,
+                e.GetPosition(this)))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (sender is not ListBoxItem item
+            || item.DataContext is not VideoItemViewModel video)
+        {
+            return;
+        }
         var viewModel = (MainViewModel)DataContext;
         if (viewModel.CanMutateLibrary)
         {
-            await viewModel.PlayAsync(
-                (VideoItemViewModel)((ListBoxItem)sender).DataContext);
+            await viewModel.PlayAsync(video);
         }
         e.Handled = true;
+    }
+
+    private void OnCardClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBoxItem item
+            && item.DataContext is SeasonItemViewModel season)
+        {
+            e.Handled = true;
+            _seasonEntryClickTimestamp = e.Timestamp;
+            _seasonEntryClickPosition = e.GetPosition(this);
+            OpenSeason(season);
+        }
+    }
+
+    private void OpenSeason(SeasonItemViewModel season)
+    {
+        var viewModel = (MainViewModel)DataContext;
+        _seasonReturnKey = season.Key;
+        _seasonReturnOffset = MainScrollViewer.VerticalOffset;
+        _hoveredCard = null;
+        RefreshCardPopup();
+        if (viewModel.OpenSeason(season))
+        {
+            VideoList.Focus();
+        }
     }
 
     private async void OnVideoListKeyDown(object sender, KeyEventArgs e)
@@ -102,11 +174,18 @@ public partial class MainWindow : Window
         if (e.Key != Key.Enter) return;
         e.Handled = true;
         var viewModel = (MainViewModel)DataContext;
-        if (viewModel.SelectedVideo is not null && viewModel.CanMutateLibrary)
+        if (viewModel.SelectedItem is SeasonItemViewModel season)
+        {
+            OpenSeason(season);
+        }
+        else if (viewModel.SelectedVideo is not null && viewModel.CanMutateLibrary)
         {
             await viewModel.PlayAsync(viewModel.SelectedVideo);
         }
     }
+
+    private void OnReturnToLibrary(object sender, RoutedEventArgs e) =>
+        ((MainViewModel)DataContext).CloseSeason();
 
     private void OnClearSearch(object sender, RoutedEventArgs e) => ClearSearch();
 
@@ -136,6 +215,11 @@ public partial class MainWindow : Window
             && e.Key is Key.Enter or Key.Escape)
         {
             return;
+        }
+        else if (e.Key == Key.Escape && viewModel.IsSeasonView)
+        {
+            viewModel.CloseSeason();
+            e.Handled = true;
         }
         else if (e.Key == Key.F1)
         {
@@ -235,6 +319,12 @@ public partial class MainWindow : Window
 
     private void OnCardEnter(object sender, MouseEventArgs e)
     {
+        if (((ListBoxItem)sender).DataContext is not VideoItemViewModel)
+        {
+            _hoveredCard = null;
+            RefreshCardPopup();
+            return;
+        }
         var card = (ListBoxItem)sender;
         _hoveredCard = card;
         UpdateCardPopupPointerPlacement(card, e);
@@ -276,6 +366,62 @@ public partial class MainWindow : Window
     {
         if (ReferenceEquals(_hoveredCard, sender)) _hoveredCard = null;
         RefreshCardPopup();
+    }
+
+    private void RestoreSeasonReturn(MainViewModel viewModel)
+    {
+        var key = _seasonReturnKey;
+        _seasonReturnKey = null;
+        if (key is null)
+        {
+            VideoList.Focus();
+            return;
+        }
+
+        var season = viewModel.FindSeason(key);
+        if (season is null)
+        {
+            VideoList.Focus();
+            return;
+        }
+
+        VideoList.UpdateLayout();
+        MainScrollViewer.ScrollToVerticalOffset(_seasonReturnOffset);
+        if (VideoList.ItemContainerGenerator.ContainerFromItem(season)
+            is not ListBoxItem container)
+        {
+            VideoList.Focus();
+            return;
+        }
+
+        var top = container.TranslatePoint(new Point(), MainScrollViewer).Y;
+        if (!IntersectsViewport(
+                top,
+                container.ActualHeight,
+                MainScrollViewer.ViewportHeight))
+        {
+            container.BringIntoView();
+        }
+        container.Focus();
+    }
+
+    internal static bool IntersectsViewport(
+        double top,
+        double height,
+        double viewportHeight) =>
+        top < viewportHeight && top + height > 0;
+
+    internal static bool IsContinuationOfSeasonEntryClick(
+        int entryTimestamp,
+        Point entryPosition,
+        int clickTimestamp,
+        Point clickPosition)
+    {
+        var elapsed = unchecked(clickTimestamp - entryTimestamp);
+        return elapsed >= 0
+            && elapsed <= DoubleClickTime
+            && Math.Abs(clickPosition.X - entryPosition.X) <= DoubleClickWidth
+            && Math.Abs(clickPosition.Y - entryPosition.Y) <= DoubleClickHeight;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -333,4 +479,10 @@ public partial class MainWindow : Window
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDoubleClickTime();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 }

@@ -319,7 +319,8 @@
                                     Orientation="Horizontal" Margin="0,0,0,12"
                                     Visibility="{Binding IsSeasonView, Converter={StaticResource BoolToVisibility}}">
                             <Button Content="전체 영상"
-                                    AutomationProperties.Name="전체 영상으로 돌아가기" />
+                                    AutomationProperties.Name="전체 영상으로 돌아가기"
+                                    Click="OnReturnToLibrary" />
                             <TextBlock Text="{Binding SeasonHeading}"
                                        Margin="14,0,0,0"
                                        VerticalAlignment="Center"
@@ -605,6 +606,7 @@
                                 </Setter.Value>
                             </Setter>
                             <EventSetter Event="MouseDoubleClick" Handler="OnVideoDoubleClick" />
+                            <EventSetter Event="PreviewMouseLeftButtonUp" Handler="OnCardClick" />
                             <EventSetter Event="MouseEnter" Handler="OnCardEnter" />
                             <EventSetter Event="MouseMove" Handler="OnCardMove" />
                             <EventSetter Event="MouseLeave" Handler="OnCardLeave" />
