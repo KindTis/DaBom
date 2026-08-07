@@ -20,6 +20,10 @@ public sealed class MetadataEditorViewModel : ViewModelBase
     private string _searchText;
     private string _seasonNumberText = string.Empty;
     private string _episodeNumberText = string.Empty;
+    private MediaType _mediaType;
+    private string _seriesTitle = string.Empty;
+    private string _episodeTitle = string.Empty;
+    private string? _tvValidationMessage;
     private string _title = string.Empty;
     private string _originalTitle = string.Empty;
     private DateTime? _releaseDate;
@@ -48,6 +52,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         _commit = commit;
         _search = search;
         _getDetails = getDetails;
+        _mediaType = record.MediaType;
+        _seriesTitle = record.SeriesTitle ?? string.Empty;
+        _episodeTitle = record.EpisodeTitle ?? string.Empty;
+        _seasonNumberText = NumberText(record.SeasonNumber);
+        _episodeNumberText = NumberText(record.EpisodeNumber);
         _title = record.Title ?? string.Empty;
         _originalTitle = record.OriginalTitle ?? string.Empty;
         _releaseDate = record.ReleaseDate is DateOnly date
@@ -68,6 +77,32 @@ public sealed class MetadataEditorViewModel : ViewModelBase
     {
         get => _title;
         set => Set(ref _title, value);
+    }
+
+    public bool IsTvEpisode => _mediaType == MediaType.TvEpisode;
+
+    public string SeriesTitle
+    {
+        get => _seriesTitle;
+        set
+        {
+            if (Set(ref _seriesTitle, value)) RegenerateEpisodeTitle();
+        }
+    }
+
+    public string EpisodeTitle
+    {
+        get => _episodeTitle;
+        set
+        {
+            if (Set(ref _episodeTitle, value)) RegenerateEpisodeTitle();
+        }
+    }
+
+    public string? TvValidationMessage
+    {
+        get => _tvValidationMessage;
+        private set => Set(ref _tvValidationMessage, value);
     }
 
     public string OriginalTitle
@@ -132,6 +167,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             if (Set(ref _seasonNumberText, value))
             {
                 Raise(nameof(CanApplyTvEpisode));
+                RegenerateEpisodeTitle();
             }
         }
     }
@@ -144,6 +180,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             if (Set(ref _episodeNumberText, value))
             {
                 Raise(nameof(CanApplyTvEpisode));
+                RegenerateEpisodeTitle();
             }
         }
     }
@@ -246,8 +283,6 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             var candidates = await _search(SearchText.Trim(), linked.Token);
             SearchCandidates = candidates;
             PendingTvCandidate = null;
-            SeasonNumberText = string.Empty;
-            EpisodeNumberText = string.Empty;
             IsSearchPopupOpen = true;
             ErrorMessage = candidates.Count == 0
                 ? "검색 결과가 없습니다"
@@ -280,8 +315,6 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         if (candidate.MediaType == MediaType.TvEpisode)
         {
             PendingTvCandidate = candidate;
-            SeasonNumberText = PositiveNumberText(OriginalRecord.SeasonNumber);
-            EpisodeNumberText = PositiveNumberText(OriginalRecord.EpisodeNumber);
             ErrorMessage = null;
             return false;
         }
@@ -320,6 +353,13 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         {
             return false;
         }
+        if (IsTvEpisode
+            && !TryReadTvDraft(out _, out _, out _))
+        {
+            TvValidationMessage =
+                "시리즈명과 시즌·에피소드 번호에 1 이상의 정수를 입력하세요.";
+            return false;
+        }
         IsSaving = true;
         try
         {
@@ -348,6 +388,22 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         var director = NullIfWhiteSpace(Director);
         var actors = ParsedActors();
         var synopsis = NullIfWhiteSpace(Synopsis);
+        var seriesTitle = IsTvEpisode
+            ? NullIfWhiteSpace(SeriesTitle)
+            : baseline.SeriesTitle;
+        var episodeTitle = IsTvEpisode
+            ? NullIfWhiteSpace(EpisodeTitle)
+            : baseline.EpisodeTitle;
+        int? seasonNumber = IsTvEpisode
+            ? TryPositiveNumber(SeasonNumberText, out var parsedSeason)
+                ? parsedSeason
+                : null
+            : baseline.SeasonNumber;
+        int? episodeNumber = IsTvEpisode
+            ? TryPositiveNumber(EpisodeNumberText, out var parsedEpisode)
+                ? parsedEpisode
+                : null
+            : baseline.EpisodeNumber;
 
         if (!string.Equals(baseline.Title, title, StringComparison.Ordinal))
         {
@@ -382,6 +438,22 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         {
             edited.Add(MetadataField.Synopsis);
         }
+        if (!string.Equals(baseline.SeriesTitle, seriesTitle, StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.SeriesTitle);
+        }
+        if (!string.Equals(baseline.EpisodeTitle, episodeTitle, StringComparison.Ordinal))
+        {
+            edited.Add(MetadataField.EpisodeTitle);
+        }
+        if (baseline.SeasonNumber != seasonNumber)
+        {
+            edited.Add(MetadataField.SeasonNumber);
+        }
+        if (baseline.EpisodeNumber != episodeNumber)
+        {
+            edited.Add(MetadataField.EpisodeNumber);
+        }
         if (_selectedBaseline is null)
         {
             if (!string.Equals(
@@ -406,6 +478,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             Actors = actors,
             Synopsis = synopsis,
             Poster = poster,
+            MediaType = _mediaType,
+            SeriesTitle = seriesTitle,
+            EpisodeTitle = episodeTitle,
+            SeasonNumber = seasonNumber,
+            EpisodeNumber = episodeNumber,
             UserEditedFields = edited
         };
     }
@@ -453,8 +530,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         IsLookupInProgress = true;
         try
         {
-            ApplyDetails(await _getDetails(candidate, linked.Token));
-            return true;
+            return ApplyDetails(await _getDetails(candidate, linked.Token));
         }
         catch (MetadataProviderException error)
         {
@@ -471,8 +547,19 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         }
     }
 
-    private void ApplyDetails(MetadataDetails details)
+    private bool ApplyDetails(MetadataDetails details)
     {
+        if (details.MediaType == MediaType.TvEpisode
+            && (string.IsNullOrWhiteSpace(details.SeriesTitle)
+                || details.SeasonNumber is not > 0
+                || details.EpisodeNumber is not > 0))
+        {
+            TvValidationMessage =
+                "시리즈명과 시즌·에피소드 번호에 올바른 값을 입력하세요.";
+            ErrorMessage = LookupError(MetadataProviderFailureKind.InvalidResponse);
+            return false;
+        }
+
         _selectedBaseline = OriginalRecord with
         {
             Title = details.MediaType == MediaType.TvEpisode
@@ -499,6 +586,19 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             UserEditedFields = []
         };
 
+        _mediaType = _selectedBaseline.MediaType;
+        _seriesTitle = _selectedBaseline.SeriesTitle ?? string.Empty;
+        _episodeTitle = _selectedBaseline.EpisodeTitle ?? string.Empty;
+        _seasonNumberText = NumberText(_selectedBaseline.SeasonNumber);
+        _episodeNumberText = NumberText(_selectedBaseline.EpisodeNumber);
+        Raise(nameof(IsTvEpisode));
+        Raise(nameof(SeriesTitle));
+        Raise(nameof(EpisodeTitle));
+        Raise(nameof(SeasonNumberText));
+        Raise(nameof(EpisodeNumberText));
+        Raise(nameof(CanApplyTvEpisode));
+        TvValidationMessage = null;
+
         Title = _selectedBaseline.Title ?? string.Empty;
         OriginalTitle = _selectedBaseline.OriginalTitle ?? string.Empty;
         ReleaseDate = _selectedBaseline.ReleaseDate is DateOnly date
@@ -514,6 +614,39 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         PendingTvCandidate = null;
         IsSearchPopupOpen = false;
         ErrorMessage = null;
+        return true;
+    }
+
+    private void RegenerateEpisodeTitle()
+    {
+        if (!TryReadTvDraft(
+                out var seriesTitle,
+                out var seasonNumber,
+                out var episodeNumber))
+        {
+            return;
+        }
+
+        Title = MetadataEnrichmentService.BuildEpisodeTitle(
+            seriesTitle,
+            NullIfWhiteSpace(EpisodeTitle),
+            seasonNumber,
+            episodeNumber);
+        TvValidationMessage = null;
+    }
+
+    private bool TryReadTvDraft(
+        out string seriesTitle,
+        out int seasonNumber,
+        out int episodeNumber)
+    {
+        seriesTitle = SeriesTitle.Trim();
+        seasonNumber = 0;
+        episodeNumber = 0;
+        return IsTvEpisode
+            && !string.IsNullOrWhiteSpace(seriesTitle)
+            && TryPositiveNumber(SeasonNumberText, out seasonNumber)
+            && TryPositiveNumber(EpisodeNumberText, out episodeNumber);
     }
 
     private static bool TryPositiveNumber(string value, out int number) =>
@@ -524,10 +657,8 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             out number)
         && number > 0;
 
-    private static string PositiveNumberText(int? value) =>
-        value is > 0
-            ? value.Value.ToString(CultureInfo.InvariantCulture)
-            : string.Empty;
+    private static string NumberText(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

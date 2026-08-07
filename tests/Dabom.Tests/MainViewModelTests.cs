@@ -1933,6 +1933,55 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void MetadataSave_MovesEpisodeAndClosesDissolvedOpenSeason()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-season-edit-");
+            try
+            {
+                var first = Path.Combine(root.FullName, "S01E01.mkv");
+                var moved = Path.Combine(root.FullName, "S01E02.mkv");
+                var target = Path.Combine(root.FullName, "S02E01.mkv");
+                var data = CachedData(root.FullName, first, moved, target);
+                data.VideosByPath[first] = TvRecord("S01E01", "시리즈", 1, 1, "10");
+                data.VideosByPath[moved] = TvRecord("S01E02", "시리즈", 1, 2, "10");
+                data.VideosByPath[target] = TvRecord("S02E01", "시리즈", 2, 1, "10");
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName),
+                    new StubScanner(first, moved, target),
+                    data);
+                await vm.ScanAsync();
+                var featured = vm.FeaturedVideo;
+                var seasonOne = vm.VisibleItems
+                    .OfType<SeasonItemViewModel>()
+                    .Single(season => season.SeasonNumber == 1);
+                Assert.IsTrue(vm.OpenSeason(seasonOne));
+                vm.SelectedVideo = vm.Videos.Single(video => video.Path == moved);
+                var editor = vm.CreateMetadataEditor()!;
+                editor.SeasonNumberText = "2";
+
+                Assert.IsTrue(await editor.SaveAsync());
+
+                Assert.IsFalse(vm.IsSeasonView);
+                Assert.IsNull(vm.SelectedVideo);
+                Assert.AreSame(featured, vm.FeaturedVideo);
+                Assert.AreEqual(
+                    2,
+                    vm.VisibleItems.OfType<SeasonItemViewModel>()
+                        .Single().EpisodeCount);
+                Assert.AreEqual(
+                    2,
+                    vm.Videos.Single(video => video.Path == moved).Record.SeasonNumber);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
     public void MetadataSave_DownloadsSelectedRemotePosterOnlyWhenSaving()
     {
         RunOnDispatcher(async () =>

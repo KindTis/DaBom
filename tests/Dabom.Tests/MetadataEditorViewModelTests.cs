@@ -412,8 +412,8 @@ public sealed class MetadataEditorViewModelTests
 
         Assert.AreEqual(0, editor.SearchCandidates.Count);
         Assert.IsNull(editor.PendingTvCandidate);
-        Assert.AreEqual(string.Empty, editor.SeasonNumberText);
-        Assert.AreEqual(string.Empty, editor.EpisodeNumberText);
+        Assert.AreEqual("2", editor.SeasonNumberText);
+        Assert.AreEqual("3", editor.EpisodeNumberText);
         Assert.IsTrue(editor.IsSearchPopupOpen);
         Assert.AreEqual("검색 결과가 없습니다", editor.ErrorMessage);
         Assert.AreEqual("사용자 제목", editor.Title);
@@ -757,7 +757,7 @@ public sealed class MetadataEditorViewModelTests
     }
 
     [TestMethod]
-    public async Task SelectCandidateAsync_TvLeavesInvalidExistingNumbersBlank()
+    public async Task SelectCandidateAsync_TvKeepsInvalidExistingNumbersVisible()
     {
         var candidate = new MetadataCandidate(
             "test",
@@ -779,8 +779,8 @@ public sealed class MetadataEditorViewModelTests
                 "회차 확정 전 상세 조회를 호출하면 안 됩니다."));
 
         Assert.IsFalse(await editor.SelectCandidateAsync(candidate));
-        Assert.AreEqual(string.Empty, editor.SeasonNumberText);
-        Assert.AreEqual(string.Empty, editor.EpisodeNumberText);
+        Assert.AreEqual("0", editor.SeasonNumberText);
+        Assert.AreEqual("-1", editor.EpisodeNumberText);
         Assert.IsFalse(editor.CanApplyTvEpisode);
     }
 
@@ -1003,6 +1003,223 @@ public sealed class MetadataEditorViewModelTests
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public void TvDraft_InitializesStructuredFieldsAndRegeneratesOnlyWhenValid()
+    {
+        var editor = new MetadataEditorViewModel(
+            @"D:\Episode.mkv",
+            new VideoRecord
+            {
+                Title = "직접 제목",
+                MediaType = MediaType.TvEpisode,
+                SeriesTitle = "시리즈",
+                SeasonNumber = 2,
+                EpisodeTitle = "회차",
+                EpisodeNumber = 3
+            },
+            null,
+            (_, _) => Task.FromResult<string?>(null));
+
+        Assert.IsTrue(editor.IsTvEpisode);
+        Assert.AreEqual("시리즈", editor.SeriesTitle);
+        Assert.AreEqual("2", editor.SeasonNumberText);
+        Assert.AreEqual("회차", editor.EpisodeTitle);
+        Assert.AreEqual("3", editor.EpisodeNumberText);
+
+        editor.SeasonNumberText = "0";
+        Assert.AreEqual("직접 제목", editor.Title);
+        editor.SeriesTitle = "새 시리즈";
+        Assert.AreEqual("직접 제목", editor.Title);
+        editor.SeasonNumberText = "4";
+        Assert.AreEqual("새 시리즈 S04E03 · 회차", editor.Title);
+
+        editor.Title = "사용자 덮어쓰기";
+        Assert.AreEqual("사용자 덮어쓰기", editor.Title);
+        editor.EpisodeTitle = string.Empty;
+        Assert.AreEqual("새 시리즈 S04E03", editor.Title);
+    }
+
+    [TestMethod]
+    public async Task TvDraft_IncompleteExistingValuesStayVisibleButCannotSave()
+    {
+        var calls = 0;
+        var editor = new MetadataEditorViewModel(
+            @"D:\Incomplete.mkv",
+            new VideoRecord
+            {
+                Title = "현재 제목",
+                MediaType = MediaType.TvEpisode,
+                SeriesTitle = "  ",
+                SeasonNumber = 0,
+                EpisodeTitle = null,
+                EpisodeNumber = -1
+            },
+            null,
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult<string?>(null);
+            });
+
+        Assert.AreEqual("  ", editor.SeriesTitle);
+        Assert.AreEqual("0", editor.SeasonNumberText);
+        Assert.AreEqual(string.Empty, editor.EpisodeTitle);
+        Assert.AreEqual("-1", editor.EpisodeNumberText);
+        Assert.AreEqual("현재 제목", editor.Title);
+        Assert.IsFalse(await editor.SaveAsync());
+        Assert.AreEqual(0, calls);
+    }
+
+    [TestMethod]
+    public async Task OnlineLookup_PreservesTvDraftUntilSuccessfulDetailsReplaceBaseline()
+    {
+        var tv = new MetadataCandidate(
+            "test", "tv-series", "10", MediaType.TvEpisode);
+        var movie = new MetadataCandidate(
+            "test", "movie", "20", MediaType.Movie);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Episode.mkv",
+            new VideoRecord
+            {
+                Title = "기존",
+                MediaType = MediaType.TvEpisode,
+                SeriesTitle = "편집 시리즈",
+                SeasonNumber = 7,
+                EpisodeTitle = "편집 회차",
+                EpisodeNumber = 8
+            },
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([tv, movie]),
+            (candidate, _) => Task.FromResult(candidate.MediaType == MediaType.Movie
+                ? MovieDetails("영화", "20")
+                : throw new AssertFailedException("TV 회차 적용 전 상세 조회 금지")));
+
+        editor.SeriesTitle = "사용자 시리즈";
+        editor.SeasonNumberText = "9";
+        editor.EpisodeTitle = "사용자 회차";
+        editor.EpisodeNumberText = "10";
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(tv));
+
+        Assert.AreEqual("사용자 시리즈", editor.SeriesTitle);
+        Assert.AreEqual("9", editor.SeasonNumberText);
+        Assert.AreEqual("사용자 회차", editor.EpisodeTitle);
+        Assert.AreEqual("10", editor.EpisodeNumberText);
+
+        Assert.IsTrue(await editor.SelectCandidateAsync(movie));
+        Assert.IsFalse(editor.IsTvEpisode);
+        Assert.AreEqual(string.Empty, editor.SeriesTitle);
+        Assert.AreEqual(string.Empty, editor.SeasonNumberText);
+        Assert.AreEqual(string.Empty, editor.EpisodeTitle);
+        Assert.AreEqual(string.Empty, editor.EpisodeNumberText);
+        Assert.AreEqual(MediaType.Movie, editor.BuildRecord(null).MediaType);
+    }
+
+    [TestMethod]
+    public async Task OnlineLookup_InvalidTvDetailsPreserveDraftAndShowValidation()
+    {
+        var candidate = new MetadataCandidate(
+            "test", "tv-series", "10", MediaType.TvEpisode);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Episode.mkv",
+            new VideoRecord
+            {
+                Title = "기존 제목",
+                MediaType = MediaType.TvEpisode,
+                SeriesTitle = "사용자 시리즈",
+                SeasonNumber = 2,
+                EpisodeTitle = "사용자 회차",
+                EpisodeNumber = 3
+            },
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            (_, _) => Task.FromResult(new MetadataDetails(
+                MediaType: MediaType.TvEpisode,
+                Title: null,
+                OriginalTitle: null,
+                SeriesTitle: " ",
+                EpisodeTitle: "조회 회차",
+                ReleaseDate: null,
+                Genres: [],
+                Director: null,
+                Actors: [],
+                Synopsis: null,
+                SeasonNumber: 2,
+                EpisodeNumber: 3,
+                PosterUri: null,
+                ProviderReferences: [])));
+
+        Assert.IsFalse(await editor.SelectCandidateAsync(candidate));
+        editor.SeasonNumberText = "2";
+        editor.EpisodeNumberText = "3";
+
+        Assert.IsFalse(await editor.ApplyTvEpisodeAsync());
+        Assert.AreEqual("사용자 시리즈", editor.SeriesTitle);
+        Assert.AreEqual("사용자 회차", editor.EpisodeTitle);
+        Assert.AreEqual("기존 제목", editor.Title);
+        Assert.IsNotNull(editor.TvValidationMessage);
+        Assert.IsNotNull(editor.ErrorMessage);
+        Assert.IsFalse(editor.HasSelectedResult);
+    }
+
+    [TestMethod]
+    public async Task TvSave_ValidatesBeforeCommitAndTracksStructuredEdits()
+    {
+        VideoRecord? committed = null;
+        var calls = 0;
+        var editor = new MetadataEditorViewModel(
+            @"D:\Episode.mkv",
+            new VideoRecord
+            {
+                Title = "시리즈 S01E01",
+                MediaType = MediaType.TvEpisode,
+                SeriesTitle = "시리즈",
+                SeasonNumber = 1,
+                EpisodeNumber = 1
+            },
+            null,
+            (value, _) =>
+            {
+                calls++;
+                committed = value.BuildRecord(null);
+                return Task.FromResult<string?>(null);
+            });
+
+        editor.SeriesTitle = "  ";
+        editor.SeasonNumberText = "문자";
+        editor.EpisodeNumberText = "0";
+
+        Assert.IsFalse(await editor.SaveAsync());
+        Assert.AreEqual(0, calls);
+        Assert.IsNotNull(editor.TvValidationMessage);
+        Assert.AreEqual("시리즈 S01E01", editor.Title);
+
+        editor.SeriesTitle = "새 시리즈";
+        editor.SeasonNumberText = "2";
+        editor.EpisodeTitle = "새 회차";
+        editor.EpisodeNumberText = "3";
+        Assert.IsTrue(await editor.SaveAsync());
+
+        Assert.AreEqual(1, calls);
+        Assert.AreEqual("새 시리즈", committed!.SeriesTitle);
+        Assert.AreEqual(2, committed.SeasonNumber);
+        Assert.AreEqual("새 회차", committed.EpisodeTitle);
+        Assert.AreEqual(3, committed.EpisodeNumber);
+        Assert.AreEqual("새 시리즈 S02E03 · 새 회차", committed.Title);
+        CollectionAssert.IsSubsetOf(
+            new[]
+            {
+                MetadataField.Title,
+                MetadataField.SeriesTitle,
+                MetadataField.SeasonNumber,
+                MetadataField.EpisodeTitle,
+                MetadataField.EpisodeNumber
+            },
+            committed.UserEditedFields.ToArray());
     }
 
     private static MetadataDetails MovieDetails(string title, string id) => new(
