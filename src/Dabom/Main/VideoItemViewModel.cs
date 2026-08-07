@@ -3,7 +3,7 @@ using System.Windows.Media.Imaging;
 
 namespace Dabom.Main;
 
-public sealed class VideoItemViewModel : ViewModelBase
+public sealed class VideoItemViewModel : LibraryItemViewModel
 {
     private VideoRecord _record;
     private BitmapSource? _poster;
@@ -16,6 +16,7 @@ public sealed class VideoItemViewModel : ViewModelBase
     }
 
     public string Path { get; }
+    public override string AutomationName => $"{DisplayTitle}, 영상";
     public string FileName => System.IO.Path.GetFileName(Path);
     public VideoRecord Record => _record;
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);

@@ -311,6 +311,108 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void SeasonGroupKey_UsesEligibilityProviderPriorityAndNormalizedTitleFallback()
+    {
+        var providerA = new VideoRecord
+        {
+            MediaType = MediaType.TvEpisode,
+            SeriesTitle = "표시명 A",
+            SeasonNumber = 2,
+            ProviderReferences = [new("tmdb", "tv-series", "10")]
+        };
+        var providerRenamed = providerA with { SeriesTitle = "표시명 B" };
+        var providerB = providerA with
+        {
+            ProviderReferences = [new("tmdb", "tv-series", "11")]
+        };
+        var titleA = providerA with
+        {
+            SeriesTitle = "  ＤＡＢＯＭ  ",
+            ProviderReferences = []
+        };
+        var titleB = titleA with { SeriesTitle = "dabom" };
+
+        Assert.AreEqual(
+            SeasonGroupKey.From(providerA),
+            SeasonGroupKey.From(providerRenamed));
+        Assert.AreNotEqual(
+            SeasonGroupKey.From(providerA),
+            SeasonGroupKey.From(providerB));
+        Assert.AreNotEqual(
+            SeasonGroupKey.From(providerA),
+            SeasonGroupKey.From(providerA with
+            {
+                ProviderReferences = [new("other", "tv-series", "10")]
+            }));
+        Assert.AreNotEqual(
+            SeasonGroupKey.From(providerA),
+            SeasonGroupKey.From(titleA));
+        Assert.AreEqual(
+            SeasonGroupKey.From(titleA),
+            SeasonGroupKey.From(titleB));
+        Assert.IsNotNull(SeasonGroupKey.From(titleA with { EpisodeNumber = null }));
+        Assert.IsNull(SeasonGroupKey.From(titleA with { MediaType = MediaType.Movie }));
+        Assert.IsNull(SeasonGroupKey.From(titleA with { SeriesTitle = "  " }));
+        Assert.IsNull(SeasonGroupKey.From(titleA with { SeasonNumber = 0 }));
+    }
+
+    [TestMethod]
+    public void SeasonItem_UsesMatchedOrderForTextAndWholeGroupForPoster()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-item-");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root.FullName, "posters"));
+            WritePng(Path.Combine(root.FullName, "posters", "season.png"));
+            var store = new LibraryStore(root.FullName);
+            var first = new VideoItemViewModel(
+                @"D:\Series\Second.mkv",
+                new VideoRecord
+                {
+                    MediaType = MediaType.TvEpisode,
+                    SeriesTitle = "첫 표시명",
+                    SeasonNumber = 4
+                },
+                store);
+            var hiddenPoster = new VideoItemViewModel(
+                @"D:\Series\Hidden.mkv",
+                first.Record with
+                {
+                    SeriesTitle = "숨은 표시명",
+                    Poster = "posters/season.png"
+                },
+                store);
+            var second = new VideoItemViewModel(
+                @"D:\Series\Third.mkv",
+                first.Record with { SeriesTitle = "다른 표시명" },
+                store);
+            var key = SeasonGroupKey.From(first.Record)!;
+
+            var season = new SeasonItemViewModel(
+                key,
+                [first, second],
+                [first, hiddenPoster, second]);
+
+            Assert.AreEqual("첫 표시명", season.DisplayTitle);
+            Assert.AreEqual(4, season.SeasonNumber);
+            Assert.AreEqual(2, season.EpisodeCount);
+            Assert.AreEqual("시즌 4 · 2편", season.Summary);
+            CollectionAssert.AreEqual(
+                new[] { first, second },
+                season.Episodes.ToArray());
+            Assert.AreSame(hiddenPoster.Poster, season.Poster);
+            Assert.IsTrue(season.HasPoster);
+            Assert.AreEqual(
+                "첫 표시명, 시즌 4, 2편, 시즌 열기",
+                season.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task ScanAsync_DefaultsToTitleAscending()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
