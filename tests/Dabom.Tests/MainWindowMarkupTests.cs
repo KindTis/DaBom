@@ -692,6 +692,29 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void MetadataWindow_ShowsAccessibleStructuredTvFieldsOnlyForEpisodes()
+    {
+        var markup = ReadMetadataWindowMarkup();
+
+        StringAssert.Contains(markup, "x:Name=\"TvMetadataFields\"");
+        StringAssert.Contains(markup, "Binding IsTvEpisode");
+        StringAssert.Contains(markup, "x:Name=\"TvSeriesTitleBox\"");
+        StringAssert.Contains(markup, "Text=\"{Binding SeriesTitle");
+        StringAssert.Contains(markup, "x:Name=\"TvSeasonNumberBox\"");
+        StringAssert.Contains(markup, "x:Name=\"TvEpisodeTitleBox\"");
+        StringAssert.Contains(markup, "Text=\"{Binding EpisodeTitle");
+        StringAssert.Contains(markup, "x:Name=\"TvEpisodeNumberBox\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"TV 시리즈명\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"TV 시즌 번호\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"TV 에피소드명\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"TV 에피소드 번호\"");
+        StringAssert.Contains(
+            markup,
+            "AutomationProperties.HelpText=\"{Binding TvValidationMessage}\"");
+        StringAssert.Contains(markup, "AutomationProperties.LiveSetting=\"Assertive\"");
+    }
+
+    [TestMethod]
     public void MetadataWindow_SearchResultsUseFloatingPopup()
     {
         var markup = ReadMetadataWindowMarkup();

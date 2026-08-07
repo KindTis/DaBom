@@ -65,6 +65,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Grid x:Name="SearchAnchor" Grid.ColumnSpan="2" Margin="0,0,0,12">
@@ -221,42 +222,111 @@
                          Margin="0,3" Padding="9,7"
                          Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="3" Text="원제" Margin="0,9,12,9" />
-                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <Grid x:Name="TvMetadataFields"
+                      Grid.Row="3" Grid.ColumnSpan="2"
+                      Margin="0,6,0,3">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsTvEpisode}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="110" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Label Grid.Row="0" Content="시리즈명"
+                           Target="{Binding ElementName=TvSeriesTitleBox}"
+                           Margin="0,3,12,3" Padding="0" VerticalContentAlignment="Center" />
+                    <TextBox x:Name="TvSeriesTitleBox" Grid.Row="0" Grid.Column="1"
+                             Margin="0,3" Padding="9,7"
+                             AutomationProperties.Name="TV 시리즈명"
+                             AutomationProperties.HelpText="{Binding TvValidationMessage}"
+                             Text="{Binding SeriesTitle, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <Label Grid.Row="1" Content="시즌 번호"
+                           Target="{Binding ElementName=TvSeasonNumberBox}"
+                           Margin="0,3,12,3" Padding="0" VerticalContentAlignment="Center" />
+                    <TextBox x:Name="TvSeasonNumberBox" Grid.Row="1" Grid.Column="1"
+                             Margin="0,3" Padding="9,7"
+                             AutomationProperties.Name="TV 시즌 번호"
+                             AutomationProperties.HelpText="{Binding TvValidationMessage}"
+                             Text="{Binding SeasonNumberText, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <Label Grid.Row="2" Content="에피소드명"
+                           Target="{Binding ElementName=TvEpisodeTitleBox}"
+                           Margin="0,3,12,3" Padding="0" VerticalContentAlignment="Center" />
+                    <TextBox x:Name="TvEpisodeTitleBox" Grid.Row="2" Grid.Column="1"
+                             Margin="0,3" Padding="9,7"
+                             AutomationProperties.Name="TV 에피소드명"
+                             AutomationProperties.HelpText="{Binding TvValidationMessage}"
+                             Text="{Binding EpisodeTitle, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <Label Grid.Row="3" Content="에피소드 번호"
+                           Target="{Binding ElementName=TvEpisodeNumberBox}"
+                           Margin="0,3,12,3" Padding="0" VerticalContentAlignment="Center" />
+                    <TextBox x:Name="TvEpisodeNumberBox" Grid.Row="3" Grid.Column="1"
+                             Margin="0,3" Padding="9,7"
+                             AutomationProperties.Name="TV 에피소드 번호"
+                             AutomationProperties.HelpText="{Binding TvValidationMessage}"
+                             Text="{Binding EpisodeNumberText, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <TextBlock x:Name="TvValidationMessage"
+                               Grid.Row="4" Grid.ColumnSpan="2"
+                               Text="{Binding TvValidationMessage}"
+                               Foreground="#FFE28B8B"
+                               TextWrapping="Wrap" Margin="0,8,0,0"
+                               AutomationProperties.LiveSetting="Assertive" />
+                </Grid>
+
+                <TextBlock Grid.Row="4" Text="원제" Margin="0,9,12,9" />
+                <TextBox Grid.Row="4" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding OriginalTitle, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="4" Text="개봉일" Margin="0,9,12,9" />
-                <DatePicker Grid.Row="4" Grid.Column="1" Margin="0,3"
+                <TextBlock Grid.Row="5" Text="개봉일" Margin="0,9,12,9" />
+                <DatePicker Grid.Row="5" Grid.Column="1" Margin="0,3"
                             SelectedDate="{Binding ReleaseDate, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="5" Text="감독" Margin="0,9,12,9" />
-                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="6" Text="감독" Margin="0,9,12,9" />
+                <TextBox Grid.Row="6" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding Director, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="6" Text="배우" Margin="0,9,12,9" />
-                <TextBox Grid.Row="6" Grid.Column="1" Margin="0,3" Padding="9,7"
+                <TextBlock Grid.Row="7" Text="배우" Margin="0,9,12,9" />
+                <TextBox Grid.Row="7" Grid.Column="1" Margin="0,3" Padding="9,7"
                          Text="{Binding ActorsText, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="쉼표로 구분" />
 
-                <TextBlock Grid.Row="7" Text="줄거리" Margin="0,9,12,9" />
-                <TextBox Grid.Row="7" Grid.Column="1" Height="150" Margin="0,3"
+                <TextBlock Grid.Row="8" Text="줄거리" Margin="0,9,12,9" />
+                <TextBox Grid.Row="8" Grid.Column="1" Height="150" Margin="0,3"
                          Padding="9,7" AcceptsReturn="True" TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
                          Text="{Binding Synopsis, UpdateSourceTrigger=PropertyChanged}" />
 
-                <TextBlock Grid.Row="8" Text="파일 크기" Margin="0,12,12,6" />
-                <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding FileSizeText}"
+                <TextBlock Grid.Row="9" Text="파일 크기" Margin="0,12,12,6" />
+                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding FileSizeText}"
                            Margin="0,12,0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="9" Text="수정일" Margin="0,6,12,6" />
-                <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding ModifiedText}"
+                <TextBlock Grid.Row="10" Text="수정일" Margin="0,6,12,6" />
+                <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding ModifiedText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="10" Text="재생시간" Margin="0,6,12,6" />
-                <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding DurationText}"
+                <TextBlock Grid.Row="11" Text="재생시간" Margin="0,6,12,6" />
+                <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding DurationText}"
                            Margin="0,6" Foreground="{StaticResource MutedBrush}" />
 
-                <TextBlock Grid.Row="11" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
+                <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
                            Foreground="#FFE28B8B" TextWrapping="Wrap" Margin="0,16,0,0" />
             </Grid>
         </ScrollViewer>
