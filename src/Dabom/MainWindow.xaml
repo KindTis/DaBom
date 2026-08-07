@@ -305,13 +305,31 @@
                                           Direction="270" Opacity="0.28" />
                     </Border.Effect>
                     <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <Grid VerticalAlignment="Center">
+                        <StackPanel Grid.Row="0" Grid.ColumnSpan="3"
+                                    Orientation="Horizontal" Margin="0,0,0,12"
+                                    Visibility="{Binding IsSeasonView, Converter={StaticResource BoolToVisibility}}">
+                            <Button Content="전체 영상"
+                                    AutomationProperties.Name="전체 영상으로 돌아가기" />
+                            <TextBlock Text="{Binding SeasonHeading}"
+                                       Margin="14,0,0,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       AutomationProperties.Name="{Binding SeasonHeading}"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+
+                        <Grid Grid.Row="1" VerticalAlignment="Center">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
@@ -329,7 +347,7 @@
                                        FontSize="9" Foreground="{StaticResource MutedBrush}" />
                         </Grid>
 
-                        <Border Grid.Column="1" Height="54" Margin="22,0"
+                        <Border Grid.Row="1" Grid.Column="1" Height="54" Margin="22,0"
                                 CornerRadius="{StaticResource ControlCornerRadius}"
                                 Background="#B8141516"
                                 BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
@@ -419,7 +437,7 @@
                             </Grid>
                         </Border>
 
-                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                        <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal"
                                     VerticalAlignment="Center">
                             <TextBlock Text="필터" Margin="0,0,10,0"
                                        VerticalAlignment="Center"
@@ -554,20 +572,11 @@
 
                 <ListBox x:Name="VideoList" Grid.Row="3" Margin="0,30,0,0"
                          BorderThickness="0" Background="Transparent"
-                         ItemsSource="{Binding VisibleVideos}"
-                         SelectedItem="{Binding SelectedVideo}"
+                         ItemsSource="{Binding VisibleItems}"
+                         SelectedItem="{Binding SelectedItem}"
+                         AutomationProperties.ItemStatus="{Binding DisplayItemCount, StringFormat={}{0}개 항목}"
                          KeyDown="OnVideoListKeyDown"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.Style>
-                        <Style TargetType="ListBox">
-                            <Setter Property="Visibility" Value="Visible" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding VisibleCount}" Value="0">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ListBox.Style>
                     <ListBox.Template>
                         <ControlTemplate TargetType="{x:Type ListBox}">
                             <ItemsPresenter />
@@ -580,6 +589,8 @@
                             <Setter Property="Margin" Value="0,0,22,42" />
                             <Setter Property="Padding" Value="0" />
                             <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                            <Setter Property="AutomationProperties.Name"
+                                    Value="{Binding AutomationName}" />
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ListBoxItem">
@@ -605,7 +616,7 @@
                             <WrapPanel IsItemsHost="True" />
                         </ItemsPanelTemplate>
                     </ListBox.ItemsPanel>
-                    <ListBox.ItemTemplate>
+                    <ListBox.Resources>
                         <DataTemplate DataType="{x:Type main:VideoItemViewModel}">
                             <StackPanel Width="175">
                                 <Border Width="175" Height="262.5"
@@ -660,7 +671,70 @@
                                 </TextBlock>
                             </StackPanel>
                         </DataTemplate>
-                    </ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type main:SeasonItemViewModel}">
+                            <StackPanel Width="175">
+                                <Border Width="175" Height="262.5"
+                                        CornerRadius="{StaticResource SurfaceCornerRadius}"
+                                        Background="{StaticResource SurfaceBrush}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
+                                            <Setter Property="BorderThickness" Value="1" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                             Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                    <Setter Property="BorderThickness" Value="2" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                             Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TextBrush}" />
+                                                    <Setter Property="BorderThickness" Value="3" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Border Margin="1" CornerRadius="15">
+                                            <Border.Background>
+                                                <ImageBrush ImageSource="{Binding Poster}" Stretch="UniformToFill" />
+                                            </Border.Background>
+                                        </Border>
+                                        <TextBlock Text="NO POSTER"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource MutedBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasPoster}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                Margin="10" Padding="7,4"
+                                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                                Background="{StaticResource AccentBrush}">
+                                            <TextBlock Text="TV 시즌"
+                                                       Foreground="{StaticResource PageBrush}"
+                                                       FontSize="10" FontWeight="Bold" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                                <TextBlock Text="{Binding DisplayTitle}"
+                                           FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis"
+                                           Margin="5,15,5,0" />
+                                <TextBlock Text="{Binding Summary}"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           Margin="5,7,5,0" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.Resources>
                 </ListBox>
 
                 <Border x:Name="FilterEmptyState" Grid.Row="3"

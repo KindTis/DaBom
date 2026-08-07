@@ -224,6 +224,47 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void LibraryGrid_BindsTypedVideoAndSeasonItemsWithAccessibleSeasonAction()
+    {
+        var markup = ReadMainWindowMarkup();
+        var videoList = XDocument.Parse(markup).Descendants()
+            .Single(element => element.Name.LocalName == "ListBox"
+                && element.Attributes().Any(attribute =>
+                    attribute.Name.LocalName == "Name"
+                    && attribute.Value == "VideoList"));
+
+        StringAssert.Contains(markup, "ItemsSource=\"{Binding VisibleItems}\"");
+        StringAssert.Contains(markup, "SelectedItem=\"{Binding SelectedItem}\"");
+        Assert.IsFalse(videoList.Elements().Any(element =>
+            element.Name.LocalName == "ListBox.Style"));
+        StringAssert.Contains(
+            markup,
+            "DataType=\"{x:Type main:VideoItemViewModel}\"");
+        StringAssert.Contains(
+            markup,
+            "DataType=\"{x:Type main:SeasonItemViewModel}\"");
+        StringAssert.Contains(markup, "Text=\"TV 시즌\"");
+        StringAssert.Contains(markup, "Text=\"{Binding Summary}\"");
+        StringAssert.Contains(markup, "Property=\"AutomationProperties.Name\"");
+        StringAssert.Contains(markup, "Value=\"{Binding AutomationName}\"");
+    }
+
+    [TestMethod]
+    public void LibraryToolbar_ExposesSeasonLocationAndAccessibleReturnControl()
+    {
+        var markup = ReadMainWindowMarkup();
+
+        StringAssert.Contains(markup, "Content=\"전체 영상\"");
+        StringAssert.Contains(
+            markup,
+            "AutomationProperties.Name=\"전체 영상으로 돌아가기\"");
+        StringAssert.Contains(markup, "Text=\"{Binding SeasonHeading}\"");
+        StringAssert.Contains(markup, "AutomationProperties.LiveSetting=\"Polite\"");
+        StringAssert.Contains(markup, "Binding IsSeasonView");
+        StringAssert.Contains(markup, "Binding DisplayItemCount");
+    }
+
+    [TestMethod]
     public void LibraryToolbar_FilterSitsBetweenSearchAndSortWithAccessibleCounts()
     {
         var markup = ReadMainWindowMarkup();
