@@ -107,10 +107,12 @@ public sealed class MainViewModel : ViewModelBase
 
     public ObservableCollection<string> Locations { get; }
     public ObservableCollection<VideoItemViewModel> Videos { get; } = [];
+    public ObservableCollection<LibraryItemViewModel> VisibleItems { get; } = [];
     public ObservableCollection<LibraryFilterOption> FilterOptions { get; } = [];
     public ObservableCollection<ScanWarning> Warnings { get; } = [];
     public System.ComponentModel.ICollectionView VisibleVideos => _visibleVideos;
     public int VisibleCount => VisibleVideos.Cast<object>().Count();
+    public int DisplayItemCount => VisibleItems.Count;
     public ICommand RescanCommand { get; }
     public ICommand PlayCommand { get; }
     public ICommand PlayFeaturedCommand { get; }
@@ -118,14 +120,22 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand RemoveLocationCommand { get; }
     public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
 
-    private VideoItemViewModel? _selectedVideo;
-    public VideoItemViewModel? SelectedVideo
+    private LibraryItemViewModel? _selectedItem;
+    public LibraryItemViewModel? SelectedItem
     {
-        get => _selectedVideo;
+        get => _selectedItem;
         set
         {
-            if (Set(ref _selectedVideo, value)) RefreshCommandStates();
+            if (!Set(ref _selectedItem, value)) return;
+            Raise(nameof(SelectedVideo));
+            RefreshCommandStates();
         }
+    }
+
+    public VideoItemViewModel? SelectedVideo
+    {
+        get => SelectedItem as VideoItemViewModel;
+        set => SelectedItem = value;
     }
 
     private VideoItemViewModel? _featuredVideo;
@@ -633,15 +643,65 @@ public sealed class MainViewModel : ViewModelBase
     {
         if (refreshFilterOptions) RefreshFilterOptions();
         _visibleVideos.Refresh();
+        RebuildVisibleItems();
         Raise(nameof(VisibleCount));
         Raise(nameof(IsFilterEmptyStateVisible));
         Raise(nameof(IsMetadataCompleteFilterEmpty));
         Raise(nameof(FilterEmptyTitle));
         Raise(nameof(FilterEmptyGuidance));
-        if (SelectedVideo is not null && !MatchesVisibleConditions(SelectedVideo))
+    }
+
+    private Dictionary<SeasonGroupKey, VideoItemViewModel[]> CurrentSeasonGroups() =>
+        Videos
+            .Select(video => (Video: video, Key: SeasonGroupKey.From(video.Record)))
+            .Where(item => item.Key is not null)
+            .GroupBy(item => item.Key!, item => item.Video)
+            .Where(group => group.Count() >= 2)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+
+    private void RebuildVisibleItems()
+    {
+        var selected = SelectedItem;
+        var selectedSeasonKey = (selected as SeasonItemViewModel)?.Key;
+        var matching = _visibleVideos.Cast<VideoItemViewModel>().ToArray();
+        var groups = CurrentSeasonGroups();
+        var matchingGroups = matching
+            .Select(video => (Video: video, Key: SeasonGroupKey.From(video.Record)))
+            .Where(item => item.Key is not null && groups.ContainsKey(item.Key!))
+            .GroupBy(item => item.Key!, item => item.Video)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var emitted = new HashSet<SeasonGroupKey>();
+        var items = new List<LibraryItemViewModel>();
+
+        foreach (var video in matching)
         {
-            SelectedVideo = null;
+            var key = SeasonGroupKey.From(video.Record);
+            if (key is not null && groups.TryGetValue(key, out var wholeGroup))
+            {
+                if (emitted.Add(key))
+                {
+                    items.Add(new SeasonItemViewModel(
+                        key,
+                        matchingGroups[key],
+                        wholeGroup));
+                }
+            }
+            else
+            {
+                items.Add(video);
+            }
         }
+
+        VisibleItems.Clear();
+        foreach (var item in items) VisibleItems.Add(item);
+        Raise(nameof(DisplayItemCount));
+
+        SelectedItem = selectedSeasonKey is null
+            ? selected is VideoItemViewModel selectedVideo && items.Contains(selectedVideo)
+                ? selectedVideo
+                : null
+            : items.OfType<SeasonItemViewModel>()
+                .SingleOrDefault(season => season.Key == selectedSeasonKey);
     }
 
     private void RefreshFilterOptions()
@@ -748,7 +808,7 @@ public sealed class MainViewModel : ViewModelBase
             VideoSort.FileModified => right.Record.LastWriteTimeUtc.CompareTo(left.Record.LastWriteTimeUtc),
             _ => StringComparer.CurrentCultureIgnoreCase.Compare(left.DisplayTitle, right.DisplayTitle)
         });
-        _visibleVideos.Refresh();
+        RefreshLibraryView(false);
     }
 
     private void RefreshCommandStates()

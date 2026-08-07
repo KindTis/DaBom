@@ -45,6 +45,146 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task Overview_GroupsBeforeSearchAndKeepsActualVideoCounts()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-overview-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "Alpha.mkv");
+            var second = Path.Combine(root.FullName, "Beta.mkv");
+            var movie = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, first, second, movie);
+            data.VideosByPath[first] = TvRecord("Alpha", "시리즈", 1, 1);
+            data.VideosByPath[second] = TvRecord("Beta", "시리즈", 1, 1);
+            data.VideosByPath[movie] = data.VideosByPath[movie] with
+            {
+                Title = "Movie",
+                MediaType = MediaType.Movie
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(first, second, movie),
+                data);
+            await vm.ScanAsync();
+
+            Assert.AreEqual(3, vm.VisibleCount);
+            Assert.AreEqual(2, vm.DisplayItemCount);
+            Assert.AreEqual(1, vm.VisibleItems.OfType<SeasonItemViewModel>().Count());
+
+            vm.SearchText = "Alpha";
+
+            var season = vm.VisibleItems.OfType<SeasonItemViewModel>().Single();
+            Assert.AreEqual(1, vm.VisibleCount);
+            Assert.AreEqual(1, vm.DisplayItemCount);
+            Assert.AreEqual(1, season.EpisodeCount);
+            Assert.AreEqual(1, Filter(vm, LibraryFilterKind.All).Count);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Overview_SeparatesProviderKeysAndUsesFirstSortedEpisodePosition()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-order-");
+        try
+        {
+            var a = Path.Combine(root.FullName, "A.mkv");
+            var b = Path.Combine(root.FullName, "B.mkv");
+            var c = Path.Combine(root.FullName, "C.mkv");
+            var d = Path.Combine(root.FullName, "D.mkv");
+            var data = CachedData(root.FullName, a, b, c, d);
+            data.VideosByPath[a] = TvRecord("Bravo", "이름 A", 1, 2, "10") with
+            {
+                ReleaseDate = new DateOnly(2020, 1, 1)
+            };
+            data.VideosByPath[b] = TvRecord("Alpha", "이름 B", 1, 1, "10") with
+            {
+                ReleaseDate = new DateOnly(2024, 1, 1)
+            };
+            data.VideosByPath[c] = TvRecord("Charlie", "이름 A", 1, 3, "11");
+            data.VideosByPath[d] = TvRecord("Delta", "이름 A", 1, 4);
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(a, b, c, d),
+                data);
+            await vm.ScanAsync();
+
+            var titleSeason = vm.VisibleItems.OfType<SeasonItemViewModel>().Single();
+            Assert.AreEqual("이름 B", titleSeason.DisplayTitle);
+            CollectionAssert.AreEqual(
+                new[] { "Alpha", "Bravo" },
+                titleSeason.Episodes.Select(video => video.DisplayTitle).ToArray());
+            Assert.AreEqual(2, vm.VisibleItems.OfType<VideoItemViewModel>().Count());
+
+            vm.SelectedSort = VideoSort.ReleaseDate;
+
+            var releaseSeason = vm.VisibleItems.OfType<SeasonItemViewModel>().Single();
+            Assert.AreEqual("이름 B", releaseSeason.DisplayTitle);
+            CollectionAssert.AreEqual(
+                new[] { b, a },
+                releaseSeason.Episodes.Select(video => video.Path).ToArray());
+            Assert.AreSame(releaseSeason, vm.VisibleItems[0]);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Overview_FileModifiedSortOrdersGroupAndItsEpisodesTogether()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-file-order-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "First.mkv");
+            var second = Path.Combine(root.FullName, "Second.mkv");
+            var movie = Path.Combine(root.FullName, "Movie.mkv");
+            var firstTime = new DateTimeOffset(2022, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var secondTime = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var movieTime = new DateTimeOffset(2023, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var data = CachedData(root.FullName, first, second, movie);
+            data.VideosByPath[first] = TvRecord("First", "시리즈", 1, 1, "10") with
+            {
+                LastWriteTimeUtc = firstTime
+            };
+            data.VideosByPath[second] = TvRecord("Second", "시리즈", 1, 2, "10") with
+            {
+                LastWriteTimeUtc = secondTime
+            };
+            data.VideosByPath[movie] = data.VideosByPath[movie] with
+            {
+                Title = "Movie",
+                MediaType = MediaType.Movie,
+                LastWriteTimeUtc = movieTime
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new TimestampScanner(
+                    (first, firstTime),
+                    (second, secondTime),
+                    (movie, movieTime)),
+                data);
+            await vm.ScanAsync();
+
+            vm.SelectedSort = VideoSort.FileModified;
+
+            var season = (SeasonItemViewModel)vm.VisibleItems[0];
+            Assert.AreEqual(movie, ((VideoItemViewModel)vm.VisibleItems[1]).Path);
+            CollectionAssert.AreEqual(
+                new[] { second, first },
+                season.Episodes.Select(video => video.Path).ToArray());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task FilterOptions_NormalizeSortDeduplicateAndCountAgainstSearch()
     {
         var root = Directory.CreateTempSubdirectory("dabom-filter-options-");
@@ -2218,6 +2358,25 @@ public sealed class MainViewModelTests
             StringComparer.OrdinalIgnoreCase)
     };
 
+    private static VideoRecord TvRecord(
+        string title,
+        string seriesTitle,
+        int seasonNumber,
+        int? episodeNumber,
+        string? seriesId = null) => new()
+    {
+        Title = title,
+        MediaType = MediaType.TvEpisode,
+        SeriesTitle = seriesTitle,
+        SeasonNumber = seasonNumber,
+        EpisodeNumber = episodeNumber,
+        FileSizeBytes = 1,
+        LastWriteTimeUtc = DateTimeOffset.UnixEpoch,
+        ProviderReferences = seriesId is null
+            ? []
+            : [new("tmdb", "tv-series", seriesId)]
+    };
+
     private static ScanResult Result(string path, long size, ScanWarning warning)
     {
         var fullPath = Path.GetFullPath(path);
@@ -2316,6 +2475,27 @@ public sealed class MainViewModelTests
                 path => new ScannedVideo(Path.GetFullPath(path), 1, DateTimeOffset.UnixEpoch, null),
                 StringComparer.OrdinalIgnoreCase);
             return Task.FromResult<ScanResult>(new(videos, []));
+        }
+    }
+
+    private sealed class TimestampScanner(
+        params (string Path, DateTimeOffset LastWriteTimeUtc)[] entries)
+        : ILibraryScanner
+    {
+        public Task<ScanResult> ScanAsync(
+            IReadOnlyList<string> locations,
+            IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            CancellationToken cancellationToken)
+        {
+            var videos = entries.ToDictionary(
+                entry => Path.GetFullPath(entry.Path),
+                entry => new ScannedVideo(
+                    Path.GetFullPath(entry.Path),
+                    1,
+                    entry.LastWriteTimeUtc,
+                    null),
+                StringComparer.OrdinalIgnoreCase);
+            return Task.FromResult(new ScanResult(videos, []));
         }
     }
 
