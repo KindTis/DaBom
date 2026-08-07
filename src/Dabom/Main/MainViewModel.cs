@@ -121,6 +121,9 @@ public sealed class MainViewModel : ViewModelBase
     public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
 
     private LibraryItemViewModel? _selectedItem;
+    private SeasonGroupKey? _activeSeasonKey;
+    private string _seasonDisplayTitle = string.Empty;
+
     public LibraryItemViewModel? SelectedItem
     {
         get => _selectedItem;
@@ -137,6 +140,11 @@ public sealed class MainViewModel : ViewModelBase
         get => SelectedItem as VideoItemViewModel;
         set => SelectedItem = value;
     }
+
+    public bool IsSeasonView => _activeSeasonKey is not null;
+    public string SeasonHeading => _activeSeasonKey is { } key
+        ? $"{_seasonDisplayTitle} · 시즌 {key.SeasonNumber}"
+        : string.Empty;
 
     private VideoItemViewModel? _featuredVideo;
     public VideoItemViewModel? FeaturedVideo
@@ -198,6 +206,32 @@ public sealed class MainViewModel : ViewModelBase
         if (CanMutateLibrary) StatusMessage = "먼저 영상을 선택하세요";
     }
 
+    public bool OpenSeason(SeasonItemViewModel season)
+    {
+        if (!VisibleItems.Contains(season)) return false;
+        _activeSeasonKey = season.Key;
+        _seasonDisplayTitle = season.DisplayTitle;
+        SelectedItem = null;
+        RefreshLibraryView(false);
+        Raise(nameof(IsSeasonView));
+        Raise(nameof(SeasonHeading));
+        return true;
+    }
+
+    public void CloseSeason()
+    {
+        if (_activeSeasonKey is null) return;
+        _activeSeasonKey = null;
+        SelectedItem = null;
+        RefreshLibraryView(false);
+        Raise(nameof(IsSeasonView));
+        Raise(nameof(SeasonHeading));
+    }
+
+    internal SeasonItemViewModel? FindSeason(SeasonGroupKey key) =>
+        VisibleItems.OfType<SeasonItemViewModel>()
+            .SingleOrDefault(season => season.Key == key);
+
     private string _statusMessage = string.Empty;
     public string StatusMessage
     {
@@ -238,8 +272,9 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsFilterActive => _selectedFilter.Kind != LibraryFilterKind.All;
     public string FilterAutomationName => $"영상 필터: {_selectedFilter.Label}";
 
-    public bool IsFilterEmptyStateVisible =>
-        IsFilterActive && Videos.Count > 0 && VisibleCount == 0;
+    public bool IsFilterEmptyStateVisible => IsSeasonView
+        ? DisplayItemCount == 0
+        : IsFilterActive && Videos.Count > 0 && VisibleCount == 0;
 
     public bool IsMetadataCompleteFilterEmpty =>
         _selectedFilter.Kind == LibraryFilterKind.MissingMetadata
@@ -670,33 +705,59 @@ public sealed class MainViewModel : ViewModelBase
             .Where(item => item.Key is not null && groups.ContainsKey(item.Key!))
             .GroupBy(item => item.Key!, item => item.Video)
             .ToDictionary(group => group.Key, group => group.ToArray());
+        var wasSeasonView = IsSeasonView;
+        if (_activeSeasonKey is not null && !groups.ContainsKey(_activeSeasonKey))
+        {
+            _activeSeasonKey = null;
+        }
         var emitted = new HashSet<SeasonGroupKey>();
         var items = new List<LibraryItemViewModel>();
 
-        foreach (var video in matching)
+        if (_activeSeasonKey is { } activeKey)
         {
-            var key = SeasonGroupKey.From(video.Record);
-            if (key is not null && groups.TryGetValue(key, out var wholeGroup))
+            var activeEpisodes = matching
+                .Where(video => SeasonGroupKey.From(video.Record) == activeKey)
+                .ToArray();
+            if (activeEpisodes.Length > 0)
             {
-                if (emitted.Add(key))
-                {
-                    items.Add(new SeasonItemViewModel(
-                        key,
-                        matchingGroups[key],
-                        wholeGroup));
-                }
+                _seasonDisplayTitle = activeEpisodes[0].Record.SeriesTitle!.Trim();
             }
-            else
+            items.AddRange(activeEpisodes);
+        }
+        else
+        {
+            foreach (var video in matching)
             {
-                items.Add(video);
+                var key = SeasonGroupKey.From(video.Record);
+                if (key is not null && groups.TryGetValue(key, out var wholeGroup))
+                {
+                    if (emitted.Add(key))
+                    {
+                        items.Add(new SeasonItemViewModel(
+                            key,
+                            matchingGroups[key],
+                            wholeGroup));
+                    }
+                }
+                else
+                {
+                    items.Add(video);
+                }
             }
         }
 
         VisibleItems.Clear();
         foreach (var item in items) VisibleItems.Add(item);
         Raise(nameof(DisplayItemCount));
+        Raise(nameof(SeasonHeading));
+        if (wasSeasonView != IsSeasonView)
+        {
+            Raise(nameof(IsSeasonView));
+        }
 
-        SelectedItem = selectedSeasonKey is null
+        SelectedItem = wasSeasonView && !IsSeasonView
+            ? null
+            : selectedSeasonKey is null
             ? selected is VideoItemViewModel selectedVideo && items.Contains(selectedVideo)
                 ? selectedVideo
                 : null

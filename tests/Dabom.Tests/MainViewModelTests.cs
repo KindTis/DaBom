@@ -185,6 +185,94 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task SeasonView_KeepsConditionsAndHeadingAcrossEmptyResultsAndClearsSelection()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-view-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "Alpha.mkv");
+            var second = Path.Combine(root.FullName, "Beta.mkv");
+            var data = CachedData(root.FullName, first, second);
+            data.VideosByPath[first] = TvRecord("Alpha", "표시명 A", 3, 1, "10");
+            data.VideosByPath[second] = TvRecord("Beta", "표시명 B", 3, 2, "10");
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(first, second),
+                data);
+            await vm.ScanAsync();
+            var featured = vm.FeaturedVideo;
+            var season = vm.VisibleItems.OfType<SeasonItemViewModel>().Single();
+            vm.SelectedItem = season;
+
+            Assert.IsNull(vm.SelectedVideo);
+            Assert.IsTrue(vm.OpenSeason(season));
+            Assert.IsTrue(vm.IsSeasonView);
+            Assert.AreEqual("표시명 A · 시즌 3", vm.SeasonHeading);
+            Assert.IsNull(vm.SelectedItem);
+            CollectionAssert.AreEqual(
+                new[] { first, second },
+                vm.VisibleItems.Cast<VideoItemViewModel>()
+                    .Select(video => video.Path)
+                    .ToArray());
+
+            vm.SelectedItem = vm.VisibleItems.Cast<VideoItemViewModel>().First();
+            vm.SearchText = "일치하지 않음";
+
+            Assert.AreEqual(0, vm.DisplayItemCount);
+            Assert.IsTrue(vm.IsSeasonView);
+            Assert.AreEqual("표시명 A · 시즌 3", vm.SeasonHeading);
+            Assert.IsTrue(vm.IsFilterEmptyStateVisible);
+            Assert.IsNull(vm.SelectedVideo);
+
+            vm.SearchText = "Beta";
+            Assert.AreEqual("표시명 B · 시즌 3", vm.SeasonHeading);
+            Assert.AreEqual(1, vm.DisplayItemCount);
+            vm.CloseSeason();
+
+            Assert.IsFalse(vm.IsSeasonView);
+            Assert.IsNull(vm.SelectedItem);
+            Assert.AreEqual("Beta", vm.SearchText);
+            Assert.AreSame(featured, vm.FeaturedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SeasonView_WhenCurrentGroupDropsBelowTwo_ReturnsToOverview()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-collapse-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "Alpha.mkv");
+            var second = Path.Combine(root.FullName, "Beta.mkv");
+            var data = CachedData(root.FullName, first, second);
+            data.VideosByPath[first] = TvRecord("Alpha", "시리즈", 1, 1, "10");
+            data.VideosByPath[second] = TvRecord("Beta", "시리즈", 1, 2, "10");
+            var scanner = new SequenceScanner(Scan(first, second), Scan(first));
+            var vm = CreateViewModel(new LibraryStore(root.FullName), scanner, data);
+            await vm.ScanAsync();
+            Assert.IsTrue(vm.OpenSeason(
+                vm.VisibleItems.OfType<SeasonItemViewModel>().Single()));
+            vm.SelectedVideo = vm.Videos.Single(video => video.Path == first);
+
+            await vm.ScanAsync();
+
+            Assert.IsFalse(vm.IsSeasonView);
+            Assert.IsNull(vm.SelectedItem);
+            Assert.AreEqual(1, vm.VisibleCount);
+            Assert.AreEqual(first, vm.VisibleItems.Cast<VideoItemViewModel>().Single().Path);
+            Assert.IsNull(vm.Videos.Single().Record.LastPlayedUtc);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task FilterOptions_NormalizeSortDeduplicateAndCountAgainstSearch()
     {
         var root = Directory.CreateTempSubdirectory("dabom-filter-options-");
