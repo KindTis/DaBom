@@ -641,6 +641,58 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void SeasonItem_SelectsFirstUnplayedEpisodeAndFallsBackToFirstOverall()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-intro-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            var playedAt = DateTimeOffset.Parse("2026-08-08T00:00:00Z");
+            VideoItemViewModel Episode(string name, int? number, bool played) => new(
+                Path.Combine(root.FullName, $"{name}.mkv"),
+                TvRecord(name, "시리즈", 1, number, "10") with
+                {
+                    EpisodeTitle = name,
+                    LastPlayedUtc = played ? playedAt : null
+                },
+                store);
+
+            var unknown = Episode("회차 없음", null, false);
+            var first = Episode("첫 화", 1, true);
+            var second = Episode("두 번째 화", 2, true);
+            var third = Episode("세 번째 화", 3, false);
+            var fourth = Episode("네 번째 화", 4, false);
+            var key = SeasonGroupKey.From(first.Record)!;
+            var season = new SeasonItemViewModel(
+                key,
+                [fourth],
+                [unknown, first, second, third, fourth]);
+
+            Assert.AreEqual(5, season.TotalEpisodeCount);
+            Assert.AreEqual("시즌 1 · 총 5편", season.TotalSummary);
+            Assert.AreSame(third, season.IntroEpisode);
+            Assert.AreEqual("다음 미시청 에피소드", season.IntroLabel);
+            Assert.AreEqual("3화 · 세 번째 화", season.IntroHeading);
+
+            var allPlayed = new[]
+            {
+                Episode("첫 화", 1, true),
+                Episode("두 번째 화", 2, true),
+                Episode("회차 없음", null, true)
+            };
+            var replay = new SeasonItemViewModel(key, allPlayed, allPlayed);
+
+            Assert.AreSame(allPlayed[0], replay.IntroEpisode);
+            Assert.AreEqual("처음부터 보기", replay.IntroLabel);
+            Assert.AreEqual("1화 · 첫 화", replay.IntroHeading);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task ScanAsync_DefaultsToTitleAscending()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
