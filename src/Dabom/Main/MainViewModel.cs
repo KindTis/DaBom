@@ -80,8 +80,8 @@ public sealed class MainViewModel : ViewModelBase
             () => SelectedVideo is null ? Task.CompletedTask : PlayAsync(SelectedVideo),
             () => CanMutateLibrary && SelectedVideo is not null);
         PlayFeaturedCommand = new AsyncRelayCommand(
-            () => FeaturedVideo is null ? Task.CompletedTask : PlayAsync(FeaturedVideo),
-            () => CanMutateLibrary && FeaturedVideo is not null);
+            () => HeroVideo is { } video ? PlayAsync(video) : Task.CompletedTask,
+            () => CanMutateLibrary && HeroVideo is not null);
         OpenMetadataCommand = new RelayCommand(
             _ =>
             {
@@ -123,6 +123,7 @@ public sealed class MainViewModel : ViewModelBase
     private LibraryItemViewModel? _selectedItem;
     private SeasonGroupKey? _activeSeasonKey;
     private string _seasonDisplayTitle = string.Empty;
+    private SeasonItemViewModel? _activeSeason;
 
     public LibraryItemViewModel? SelectedItem
     {
@@ -146,13 +147,33 @@ public sealed class MainViewModel : ViewModelBase
         ? $"{_seasonDisplayTitle} · 시즌 {key.SeasonNumber}"
         : string.Empty;
 
+    public SeasonItemViewModel? ActiveSeason
+    {
+        get => _activeSeason;
+        private set
+        {
+            if (!Set(ref _activeSeason, value)) return;
+            Raise(nameof(HeroVideo));
+            RefreshCommandStates();
+        }
+    }
+
+    public VideoItemViewModel? HeroVideo => ActiveSeason?.IntroEpisode ?? FeaturedVideo;
+    public string ToolbarContextLabel => IsSeasonView ? "에피소드" : "내 영상";
+    public int ToolbarItemCount => IsSeasonView ? DisplayItemCount : VisibleCount;
+    public string ToolbarGuidance => IsSeasonView
+        ? "현재 조건의 에피소드를 표시하고 있습니다."
+        : "현재 조건의 영상을 표시하고 있습니다.";
+
     private VideoItemViewModel? _featuredVideo;
     public VideoItemViewModel? FeaturedVideo
     {
         get => _featuredVideo;
         private set
         {
-            if (Set(ref _featuredVideo, value)) RefreshCommandStates();
+            if (!Set(ref _featuredVideo, value)) return;
+            Raise(nameof(HeroVideo));
+            RefreshCommandStates();
         }
     }
 
@@ -213,8 +234,7 @@ public sealed class MainViewModel : ViewModelBase
         _seasonDisplayTitle = season.DisplayTitle;
         SelectedItem = null;
         RefreshLibraryView(false);
-        Raise(nameof(IsSeasonView));
-        Raise(nameof(SeasonHeading));
+        RaiseSeasonContext();
         return true;
     }
 
@@ -224,8 +244,7 @@ public sealed class MainViewModel : ViewModelBase
         _activeSeasonKey = null;
         SelectedItem = null;
         RefreshLibraryView(false);
-        Raise(nameof(IsSeasonView));
-        Raise(nameof(SeasonHeading));
+        RaiseSeasonContext();
     }
 
     internal SeasonItemViewModel? FindSeason(SeasonGroupKey key) =>
@@ -506,6 +525,7 @@ public sealed class MainViewModel : ViewModelBase
                 await _store.SaveAsync(next);
                 _data = next;
                 video.Update(updated, _store);
+                if (IsSeasonView) RefreshLibraryView(false);
                 StatusMessage = "영상을 기본 앱으로 실행했습니다.";
             }
             catch (Exception error)
@@ -715,6 +735,8 @@ public sealed class MainViewModel : ViewModelBase
 
         if (_activeSeasonKey is { } activeKey)
         {
+            var wholeGroup = groups[activeKey];
+            ActiveSeason = new SeasonItemViewModel(activeKey, wholeGroup, wholeGroup);
             var activeEpisodes = matching
                 .Where(video => SeasonGroupKey.From(video.Record) == activeKey)
                 .ToArray();
@@ -726,6 +748,7 @@ public sealed class MainViewModel : ViewModelBase
         }
         else
         {
+            ActiveSeason = null;
             foreach (var video in matching)
             {
                 var key = SeasonGroupKey.From(video.Record);
@@ -749,10 +772,11 @@ public sealed class MainViewModel : ViewModelBase
         VisibleItems.Clear();
         foreach (var item in items) VisibleItems.Add(item);
         Raise(nameof(DisplayItemCount));
+        Raise(nameof(ToolbarItemCount));
         Raise(nameof(SeasonHeading));
         if (wasSeasonView != IsSeasonView)
         {
-            Raise(nameof(IsSeasonView));
+            RaiseSeasonContext();
         }
 
         SelectedItem = wasSeasonView && !IsSeasonView
@@ -761,8 +785,17 @@ public sealed class MainViewModel : ViewModelBase
             ? selected is VideoItemViewModel selectedVideo && items.Contains(selectedVideo)
                 ? selectedVideo
                 : null
-            : items.OfType<SeasonItemViewModel>()
-                .SingleOrDefault(season => season.Key == selectedSeasonKey);
+                : items.OfType<SeasonItemViewModel>()
+                    .SingleOrDefault(season => season.Key == selectedSeasonKey);
+    }
+
+    private void RaiseSeasonContext()
+    {
+        Raise(nameof(IsSeasonView));
+        Raise(nameof(SeasonHeading));
+        Raise(nameof(ToolbarContextLabel));
+        Raise(nameof(ToolbarItemCount));
+        Raise(nameof(ToolbarGuidance));
     }
 
     private void RefreshFilterOptions()

@@ -241,6 +241,142 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task SeasonView_UsesWholeGroupHeroAndContextAcrossSearch()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-hero-");
+        try
+        {
+            var paths = Enumerable.Range(1, 4)
+                .Select(number => Path.Combine(root.FullName, $"Episode {number}.mkv"))
+                .ToArray();
+            var playedAt = DateTimeOffset.Parse("2026-08-07T00:00:00Z");
+            var data = CachedData(root.FullName, paths);
+            for (var index = 0; index < paths.Length; index++)
+            {
+                data.VideosByPath[paths[index]] = TvRecord(
+                    $"Episode {index + 1}", "시리즈", 1, index + 1, "10") with
+                {
+                    EpisodeTitle = $"에피소드 {index + 1}",
+                    LastPlayedUtc = index < 2 ? playedAt : null
+                };
+            }
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(paths),
+                data);
+            await vm.ScanAsync();
+            var featured = vm.FeaturedVideo;
+
+            Assert.IsTrue(vm.OpenSeason(
+                vm.VisibleItems.OfType<SeasonItemViewModel>().Single()));
+
+            Assert.AreEqual(paths[2], vm.HeroVideo!.Path);
+            Assert.AreEqual(4, vm.ActiveSeason!.TotalEpisodeCount);
+            Assert.AreEqual("에피소드", vm.ToolbarContextLabel);
+            Assert.AreEqual(4, vm.ToolbarItemCount);
+
+            vm.SearchText = "Episode 4";
+
+            Assert.AreEqual(1, vm.DisplayItemCount);
+            Assert.AreEqual(1, vm.ToolbarItemCount);
+            Assert.AreEqual(paths[2], vm.HeroVideo!.Path);
+
+            vm.CloseSeason();
+
+            Assert.AreSame(featured, vm.HeroVideo);
+            Assert.AreEqual("내 영상", vm.ToolbarContextLabel);
+            Assert.AreEqual(vm.VisibleCount, vm.ToolbarItemCount);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SeasonHeroPlayback_AdvancesAndRestartsAfterSavedHistory()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-hero-play-");
+        try
+        {
+            var paths = Enumerable.Range(1, 4)
+                .Select(number => Path.Combine(root.FullName, $"Episode {number}.mkv"))
+                .ToArray();
+            var playedAt = DateTimeOffset.Parse("2026-08-07T00:00:00Z");
+            var data = CachedData(root.FullName, paths);
+            for (var index = 0; index < paths.Length; index++)
+            {
+                data.VideosByPath[paths[index]] = TvRecord(
+                    $"Episode {index + 1}", "시리즈", 1, index + 1, "10") with
+                {
+                    LastPlayedUtc = index < 2 ? playedAt : null
+                };
+            }
+            var vm = new MainViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(paths),
+                data,
+                _ => true,
+                () => DateTimeOffset.Parse("2026-08-08T00:00:00Z"),
+                _ => 0);
+            await vm.ScanAsync();
+            var featured = vm.FeaturedVideo;
+            Assert.IsTrue(vm.OpenSeason(
+                vm.VisibleItems.OfType<SeasonItemViewModel>().Single()));
+
+            await vm.PlayAsync(vm.HeroVideo!);
+            Assert.AreEqual(paths[3], vm.HeroVideo!.Path);
+
+            await vm.PlayAsync(vm.HeroVideo!);
+            Assert.AreEqual(paths[0], vm.HeroVideo!.Path);
+            Assert.AreEqual("처음부터 보기", vm.ActiveSeason!.IntroLabel);
+            Assert.AreSame(featured, vm.FeaturedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SeasonHeroPlayback_WhenHistorySaveFails_KeepsCurrentIntro()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-hero-save-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "Episode 1.mkv");
+            var second = Path.Combine(root.FullName, "Episode 2.mkv");
+            var data = CachedData(root.FullName, first, second);
+            data.VideosByPath[first] = TvRecord("Episode 1", "시리즈", 1, 1, "10");
+            data.VideosByPath[second] = TvRecord("Episode 2", "시리즈", 1, 2, "10");
+            var store = new LibraryStore(
+                root.FullName,
+                (_, _, _) => throw new IOException("disk full"));
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(first, second),
+                data,
+                _ => true,
+                () => DateTimeOffset.Parse("2026-08-08T00:00:00Z"),
+                _ => 0);
+            await vm.ScanAsync();
+            Assert.IsTrue(vm.OpenSeason(
+                vm.VisibleItems.OfType<SeasonItemViewModel>().Single()));
+            var intro = vm.HeroVideo;
+
+            await vm.PlayAsync(intro!);
+
+            Assert.AreSame(intro, vm.HeroVideo);
+            Assert.IsNull(intro!.Record.LastPlayedUtc);
+            StringAssert.Contains(vm.StatusMessage, "재생 이력 저장 실패");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task SeasonView_WhenCurrentGroupDropsBelowTwo_ReturnsToOverview()
     {
         var root = Directory.CreateTempSubdirectory("dabom-season-collapse-");
