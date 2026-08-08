@@ -319,12 +319,6 @@ public partial class MainWindow : Window
 
     private void OnCardEnter(object sender, MouseEventArgs e)
     {
-        if (((ListBoxItem)sender).DataContext is not VideoItemViewModel)
-        {
-            _hoveredCard = null;
-            RefreshCardPopup();
-            return;
-        }
         var card = (ListBoxItem)sender;
         _hoveredCard = card;
         UpdateCardPopupPointerPlacement(card, e);

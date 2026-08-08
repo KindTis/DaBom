@@ -147,13 +147,13 @@
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Visible" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding FeaturedVideo}" Value="{x:Null}">
+                                <DataTrigger Binding="{Binding HeroVideo}" Value="{x:Null}">
                                     <Setter Property="Visibility" Value="Collapsed" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <Grid x:Name="FeaturedHeroSurface" DataContext="{Binding FeaturedVideo}">
+                    <Grid x:Name="FeaturedHeroSurface" DataContext="{Binding HeroVideo}">
                         <Image x:Name="FeaturedBackdrop" Source="{Binding Poster}"
                                Height="392"
                                Stretch="UniformToFill" Opacity="0.34"
@@ -202,8 +202,20 @@
                                     </TextBlock>
                                 </Grid>
                             </Border>
-                            <StackPanel Grid.Column="1" Margin="50,0,0,0"
+                            <StackPanel x:Name="FeaturedHeroContent"
+                                        Grid.Column="1" Margin="50,0,0,0"
                                         VerticalAlignment="Center">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding DataContext.IsSeasonView, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                     Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
                             <TextBlock Text="다음에 볼 영상" Foreground="{StaticResource AccentBrush}"
                                        FontWeight="SemiBold" />
                             <TextBlock Text="{Binding OriginalTitle}"
@@ -233,6 +245,63 @@
                                     <TextBlock Text="재생하기" />
                                 </StackPanel>
                             </Button>
+                            </StackPanel>
+                            <StackPanel x:Name="SeasonHeroContent"
+                                        Grid.Column="1"
+                                        Margin="50,0,0,0"
+                                        VerticalAlignment="Center"
+                                        DataContext="{Binding DataContext,
+                                            RelativeSource={RelativeSource AncestorType=Window}}">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSeasonView}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <Button Content="← 전체 영상"
+                                        HorizontalAlignment="Left"
+                                        AutomationProperties.Name="전체 영상으로 돌아가기"
+                                        Click="OnReturnToLibrary" />
+                                <TextBlock Text="TV 시즌"
+                                           Margin="0,20,0,0"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding SeasonHeading}"
+                                           FontSize="48"
+                                           FontWeight="SemiBold"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <TextBlock Margin="0,8,0,0"
+                                           Foreground="{StaticResource MutedBrush}">
+                                    <Run Text="총 " />
+                                    <Run Text="{Binding ActiveSeason.TotalEpisodeCount, Mode=OneWay}" />
+                                    <Run Text="편" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding ActiveSeason.IntroLabel}"
+                                           Margin="0,18,0,0"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding ActiveSeason.IntroHeading}"
+                                           Margin="0,6,0,0"
+                                           FontSize="24"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding ActiveSeason.IntroEpisode.Record.Synopsis}"
+                                           Margin="0,12,0,0"
+                                           MaxWidth="650"
+                                           HorizontalAlignment="Left"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           TextWrapping="Wrap" />
+                                <Button Style="{StaticResource PrimaryActionButtonStyle}"
+                                        Command="{Binding PlayFeaturedCommand}"
+                                        Margin="0,22,0,0"
+                                        HorizontalAlignment="Left"
+                                        AutomationProperties.Name="대표 에피소드 재생하기">
+                                    <TextBlock Text="재생하기" />
+                                </Button>
                             </StackPanel>
                         </Grid>
                     </Grid>
@@ -305,50 +374,32 @@
                                           Direction="270" Opacity="0.28" />
                     </Border.Effect>
                     <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <StackPanel Grid.Row="0" Grid.ColumnSpan="3"
-                                    Orientation="Horizontal" Margin="0,0,0,12"
-                                    Visibility="{Binding IsSeasonView, Converter={StaticResource BoolToVisibility}}">
-                            <Button Content="전체 영상"
-                                    AutomationProperties.Name="전체 영상으로 돌아가기"
-                                    Click="OnReturnToLibrary" />
-                            <TextBlock Text="{Binding SeasonHeading}"
-                                       Margin="14,0,0,0"
-                                       VerticalAlignment="Center"
-                                       FontSize="18"
-                                       FontWeight="SemiBold"
-                                       AutomationProperties.Name="{Binding SeasonHeading}"
-                                       AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
-
-                        <Grid Grid.Row="1" VerticalAlignment="Center">
+                        <Grid VerticalAlignment="Center">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="내 영상" FontSize="10" FontWeight="SemiBold"
+                                <TextBlock Text="{Binding ToolbarContextLabel}"
+                                           FontSize="10" FontWeight="SemiBold"
                                            Foreground="{StaticResource AccentBrush}"
                                            VerticalAlignment="Center" />
                                 <TextBlock Margin="6,0,0,0" FontSize="22" FontWeight="SemiBold">
-                                    <Run Text="{Binding VisibleCount, Mode=OneWay}" />
+                                    <Run Text="{Binding ToolbarItemCount, Mode=OneWay}" />
                                     <Run Text="편" />
                                 </TextBlock>
                             </StackPanel>
-                            <TextBlock Grid.Row="1" Text="현재 조건의 영상을 표시하고 있습니다."
+                            <TextBlock Grid.Row="1" Text="{Binding ToolbarGuidance}"
                                        FontSize="9" Foreground="{StaticResource MutedBrush}" />
                         </Grid>
 
-                        <Border Grid.Row="1" Grid.Column="1" Height="54" Margin="22,0"
+                        <Border Grid.Column="1" Height="54" Margin="22,0"
                                 CornerRadius="{StaticResource ControlCornerRadius}"
                                 Background="#B8141516"
                                 BorderBrush="{StaticResource LineBrush}" BorderThickness="1">
@@ -438,7 +489,7 @@
                             </Grid>
                         </Border>
 
-                        <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal"
+                        <StackPanel Grid.Column="2" Orientation="Horizontal"
                                     VerticalAlignment="Center">
                             <TextBlock Text="필터" Margin="0,0,10,0"
                                        VerticalAlignment="Center"
@@ -717,13 +768,16 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <Border HorizontalAlignment="Left" VerticalAlignment="Top"
-                                                Margin="10" Padding="7,4"
-                                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                        <Border x:Name="SeasonTypeRibbon"
+                                                HorizontalAlignment="Stretch"
+                                                VerticalAlignment="Top"
+                                                Padding="0,8"
+                                                CornerRadius="15,15,0,0"
                                                 Background="{StaticResource AccentBrush}">
                                             <TextBlock Text="TV 시즌"
+                                                       HorizontalAlignment="Center"
                                                        Foreground="{StaticResource PageBrush}"
-                                                       FontSize="10" FontWeight="Bold" />
+                                                       FontSize="12" FontWeight="Bold" />
                                         </Border>
                                     </Grid>
                                 </Border>
@@ -858,7 +912,10 @@
                         <GradientStop Color="#FF262729" Offset="1" />
                     </LinearGradientBrush>
                 </Border.Background>
-                <Grid x:Name="CardPopupSurface">
+                <ContentControl x:Name="CardPopupSurface" Content="{Binding}">
+                    <ContentControl.Resources>
+                        <DataTemplate DataType="{x:Type main:VideoItemViewModel}">
+                            <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="126" />
                         <ColumnDefinition Width="*" />
@@ -978,7 +1035,74 @@
                             </StackPanel>
                         </Border>
                     </StackPanel>
-                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                        <DataTemplate DataType="{x:Type main:SeasonItemViewModel}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="126" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border CornerRadius="16,0,0,16"
+                                        Background="{StaticResource SurfaceBrush}">
+                                    <Grid>
+                                        <Border Margin="1" CornerRadius="15,0,0,15">
+                                            <Border.Background>
+                                                <ImageBrush ImageSource="{Binding Poster}"
+                                                            Stretch="UniformToFill" />
+                                            </Border.Background>
+                                        </Border>
+                                        <TextBlock Text="NO POSTER"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource MutedBrush}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasPoster}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="25,23,25,21">
+                                    <TextBlock Text="TV 시즌 그룹"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentBrush}" />
+                                    <TextBlock Text="{Binding DisplayTitle}"
+                                               Margin="0,4,0,4"
+                                               FontSize="22"
+                                               FontWeight="SemiBold"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding TotalSummary}"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                    <TextBlock Text="{Binding IntroLabel}"
+                                               Margin="0,15,0,0"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding IntroHeading}"
+                                               Margin="0,5,0,0"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding IntroEpisode.Record.Synopsis}"
+                                               Margin="0,10,0,0"
+                                               FontSize="11"
+                                               LineHeight="18"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock Text="클릭 또는 Enter로 시즌 열기"
+                                               Margin="0,14,0,0"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ContentControl.Resources>
+                </ContentControl>
             </Border>
         </Popup>
     </Grid>

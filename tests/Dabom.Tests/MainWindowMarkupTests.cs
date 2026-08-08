@@ -243,6 +243,7 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(
             markup,
             "DataType=\"{x:Type main:SeasonItemViewModel}\"");
+        StringAssert.Contains(markup, "x:Name=\"SeasonTypeRibbon\"");
         StringAssert.Contains(markup, "Text=\"TV 시즌\"");
         StringAssert.Contains(markup, "Text=\"{Binding Summary}\"");
         StringAssert.Contains(markup, "Property=\"AutomationProperties.Name\"");
@@ -250,18 +251,33 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
-    public void LibraryToolbar_ExposesSeasonLocationAndAccessibleReturnControl()
+    public void SeasonHero_ExposesContextAndAccessibleReturnControl()
     {
         var markup = ReadMainWindowMarkup();
 
-        StringAssert.Contains(markup, "Content=\"전체 영상\"");
+        StringAssert.Contains(markup, "x:Name=\"SeasonHeroContent\"");
+        StringAssert.Contains(markup, "DataContext=\"{Binding HeroVideo}\"");
+        StringAssert.Contains(markup, "Content=\"← 전체 영상\"");
         StringAssert.Contains(
             markup,
             "AutomationProperties.Name=\"전체 영상으로 돌아가기\"");
         StringAssert.Contains(markup, "Text=\"{Binding SeasonHeading}\"");
-        StringAssert.Contains(markup, "AutomationProperties.LiveSetting=\"Polite\"");
-        StringAssert.Contains(markup, "Binding IsSeasonView");
-        StringAssert.Contains(markup, "Binding DisplayItemCount");
+        StringAssert.Contains(markup, "Text=\"{Binding ActiveSeason.IntroLabel}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding ActiveSeason.IntroHeading}\"");
+        StringAssert.Contains(markup, "Command=\"{Binding PlayFeaturedCommand}\"");
+    }
+
+    [TestMethod]
+    public void LibraryToolbar_UsesSameControlsWithContextBindings()
+    {
+        var markup = ReadMainWindowMarkup();
+
+        StringAssert.Contains(markup, "Text=\"{Binding ToolbarContextLabel}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding ToolbarItemCount, Mode=OneWay}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding ToolbarGuidance}\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"영상 검색\"");
+        StringAssert.Contains(markup, "x:Name=\"FilterComboBox\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"정렬\"");
     }
 
     [TestMethod]
@@ -443,29 +459,49 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"영상\"");
     }
 
-    [STATestMethod]
-    [DoNotParallelize]
+    [TestMethod]
+    public void CardPopup_UsesVideoAndSeasonTemplatesAndAllowsSeasonHover()
+    {
+        var markup = ReadMainWindowMarkup();
+        var code = ReadMainWindowCode();
+        var popupStart = markup.IndexOf(
+            "<Popup x:Name=\"CardPopup\"",
+            StringComparison.Ordinal);
+        var popupEnd = markup.IndexOf("</Popup>", popupStart, StringComparison.Ordinal);
+        var popup = markup[popupStart..popupEnd];
+        var enterStart = code.IndexOf(
+            "private void OnCardEnter",
+            StringComparison.Ordinal);
+        var enterEnd = code.IndexOf(
+            "private void OnCardMove",
+            enterStart,
+            StringComparison.Ordinal);
+        var enter = code[enterStart..enterEnd];
+
+        StringAssert.Contains(markup, "x:Name=\"SeasonTypeRibbon\"");
+        StringAssert.Contains(popup, "DataType=\"{x:Type main:VideoItemViewModel}\"");
+        StringAssert.Contains(popup, "DataType=\"{x:Type main:SeasonItemViewModel}\"");
+        StringAssert.Contains(popup, "Text=\"{Binding TotalSummary}\"");
+        StringAssert.Contains(popup, "Text=\"{Binding IntroHeading}\"");
+        Assert.IsFalse(enter.Contains(
+            "VideoItemViewModel",
+            StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void CardPopup_DisplaysActualFileNameUnderTitle()
     {
-        EnsureApplicationResources();
-        var window = new MainWindow();
-        try
-        {
-            var fileName = window.FindName("CardPopupFileName") as TextBlock;
-            Assert.IsNotNull(fileName);
-            var binding = fileName.GetBindingExpression(TextBlock.TextProperty);
+        var fileName = XDocument.Parse(ReadMainWindowMarkup())
+            .Descendants()
+            .Single(element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Name"
+                && attribute.Value == "CardPopupFileName"));
 
-            Assert.IsNotNull(binding);
-            Assert.AreEqual(
-                nameof(VideoItemViewModel.FileName),
-                binding.ParentBinding.Path.Path);
-            Assert.AreEqual(10d, fileName.FontSize);
-            Assert.AreEqual(TextTrimming.CharacterEllipsis, fileName.TextTrimming);
-        }
-        finally
-        {
-            window.Close();
-        }
+        Assert.AreEqual("{Binding FileName}", (string?)fileName.Attribute("Text"));
+        Assert.AreEqual("10", (string?)fileName.Attribute("FontSize"));
+        Assert.AreEqual(
+            "CharacterEllipsis",
+            (string?)fileName.Attribute("TextTrimming"));
     }
 
     [TestMethod]
