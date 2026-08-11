@@ -334,32 +334,71 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" Margin="0,28,0,0" MinHeight="380" Padding="50"
-                        CornerRadius="{StaticResource HeroCornerRadius}"
-                        BorderBrush="{StaticResource LineBrush}"
-                        BorderThickness="1" Background="#FF171819">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding FeaturedVideo}" Value="{x:Null}">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding Locations.Count}" Value="0">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Border.Style>
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="지원하는 영상이 없습니다" FontSize="34"
-                                   FontWeight="SemiBold" TextAlignment="Center" />
-                        <TextBlock Text="MP4, MKV, AVI, MOV, WMV, M4V 파일을 확인합니다."
-                                   Margin="0,14,0,0" Foreground="{StaticResource MutedBrush}" />
-                        <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}"
-                                HorizontalAlignment="Center" Margin="0,24,0,0" />
-                    </StackPanel>
-                </Border>
+                <Grid Grid.Row="1" Margin="0,28,0,0">
+                    <Border x:Name="LibraryLoadingState" MinHeight="380" Padding="50"
+                            CornerRadius="{StaticResource HeroCornerRadius}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" Background="#FF171819">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsLibraryLoading}" Value="True" />
+                                            <Condition Binding="{Binding HeroVideo}" Value="{x:Null}" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                    <DataTrigger Binding="{Binding Locations.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="영상 목록을 불러오는 중입니다" FontSize="34"
+                                       FontWeight="SemiBold" TextAlignment="Center" />
+                            <TextBlock Text="보관 위치에서 지원하는 영상 파일을 확인하고 있습니다."
+                                       Margin="0,14,0,0" Foreground="{StaticResource MutedBrush}" />
+                            <ProgressBar Width="280" Height="5" Margin="0,28,0,0"
+                                         IsIndeterminate="True"
+                                         AutomationProperties.Name="영상 목록 불러오는 중" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="NoSupportedVideosState" MinHeight="380" Padding="50"
+                            CornerRadius="{StaticResource HeroCornerRadius}"
+                            BorderBrush="{StaticResource LineBrush}"
+                            BorderThickness="1" Background="#FF171819">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding HasCompletedLibraryScan}" Value="True" />
+                                            <Condition Binding="{Binding IsLibraryLoading}" Value="False" />
+                                            <Condition Binding="{Binding Videos.Count}" Value="0" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger>
+                                    <DataTrigger Binding="{Binding Locations.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="지원하는 영상이 없습니다" FontSize="34"
+                                       FontWeight="SemiBold" TextAlignment="Center" />
+                            <TextBlock Text="MP4, MKV, AVI, MOV, WMV, M4V 파일을 확인합니다."
+                                       Margin="0,14,0,0" Foreground="{StaticResource MutedBrush}" />
+                            <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}"
+                                    HorizontalAlignment="Center" Margin="0,24,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
 
                 <Border x:Name="LibraryToolbar" Grid.Row="2" Panel.ZIndex="1"
                         Margin="0,24,0,0"

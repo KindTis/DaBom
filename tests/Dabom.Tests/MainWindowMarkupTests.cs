@@ -360,6 +360,40 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"{Binding FilterEmptyGuidance}\"");
     }
 
+    [TestMethod]
+    public void LibraryLoadState_UsesProgressUntilSuccessfulEmptyScan()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var loading = document.Descendants().Single(element =>
+            (string?)element.Attribute(x + "Name") == "LibraryLoadingState");
+        var progress = loading.Descendants().Single(element =>
+            element.Name.LocalName == "ProgressBar");
+        var loadingText = loading.Descendants().Single(element =>
+            (string?)element.Attribute("Text") == "영상 목록을 불러오는 중입니다");
+        var loadingConditions = loading.Descendants()
+            .Where(element => element.Name.LocalName == "Condition")
+            .ToDictionary(
+                element => (string)element.Attribute("Binding")!,
+                element => (string)element.Attribute("Value")!);
+        var empty = document.Descendants().Single(element =>
+            (string?)element.Attribute(x + "Name") == "NoSupportedVideosState");
+        var emptyConditions = empty.Descendants()
+            .Where(element => element.Name.LocalName == "Condition")
+            .ToDictionary(
+                element => (string)element.Attribute("Binding")!,
+                element => (string)element.Attribute("Value")!);
+
+        Assert.AreEqual("True", (string?)progress.Attribute("IsIndeterminate"));
+        Assert.IsNotNull(loadingText);
+        Assert.AreEqual("True", loadingConditions["{Binding IsLibraryLoading}"]);
+        Assert.AreEqual("{x:Null}", loadingConditions["{Binding HeroVideo}"]);
+        Assert.AreEqual("True", emptyConditions["{Binding HasCompletedLibraryScan}"]);
+        Assert.AreEqual("False", emptyConditions["{Binding IsLibraryLoading}"]);
+        Assert.AreEqual("0", emptyConditions["{Binding Videos.Count}"]);
+    }
+
     [DataTestMethod]
     [DataRow(30d, 200d, 0d)]
     [DataRow(18d, 200d, 0d)]

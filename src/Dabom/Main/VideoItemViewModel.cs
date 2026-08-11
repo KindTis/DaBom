@@ -5,14 +5,17 @@ namespace Dabom.Main;
 
 public sealed class VideoItemViewModel : LibraryItemViewModel
 {
+    private readonly LibraryStore _store;
     private VideoRecord _record;
     private BitmapSource? _poster;
+    private string? _posterLoadReference;
+    private Task? _posterLoad;
 
     internal VideoItemViewModel(string path, VideoRecord record, LibraryStore store)
     {
         Path = path;
+        _store = store;
         _record = record;
-        _poster = PosterImage.TryLoad(store.ResolvePosterPath(record.Poster));
     }
 
     public string Path { get; }
@@ -32,12 +35,62 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
     public string FileSizeText => $"{_record.FileSizeBytes / 1024d / 1024d:N1} MB";
     public BitmapSource? Poster => _poster;
     public bool HasPoster => _poster is not null;
+    internal bool NeedsPosterLoad =>
+        _poster is null && !string.IsNullOrWhiteSpace(_record.Poster);
     internal bool Matches(string query) => LibraryRules.Matches(Path, _record, query);
 
-    internal void Update(VideoRecord record, LibraryStore store)
+    internal Task LoadPosterAsync()
     {
+        var posterReference = _record.Poster;
+        if (string.IsNullOrWhiteSpace(posterReference))
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_posterLoad is not null
+            && string.Equals(
+                _posterLoadReference,
+                posterReference,
+                StringComparison.OrdinalIgnoreCase)
+            && (!_posterLoad.IsCompleted || _poster is not null))
+        {
+            return _posterLoad;
+        }
+
+        _posterLoadReference = posterReference;
+        _posterLoad = LoadPosterCoreAsync(posterReference);
+        return _posterLoad;
+    }
+
+    internal void Update(VideoRecord record)
+    {
+        if (!string.Equals(
+            _record.Poster,
+            record.Poster,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            _poster = null;
+            _posterLoadReference = null;
+            _posterLoad = null;
+        }
         _record = record;
-        _poster = PosterImage.TryLoad(store.ResolvePosterPath(record.Poster));
         Raise(string.Empty);
+    }
+
+    private async Task LoadPosterCoreAsync(string posterReference)
+    {
+        var path = _store.ResolvePosterPath(posterReference);
+        var poster = await Task.Run(() => PosterImage.TryLoad(path));
+        if (!string.Equals(
+            _record.Poster,
+            posterReference,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _poster = poster;
+        Raise(nameof(Poster));
+        Raise(nameof(HasPoster));
     }
 }

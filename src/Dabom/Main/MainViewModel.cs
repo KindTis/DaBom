@@ -93,6 +93,7 @@ public sealed class MainViewModel : ViewModelBase
             path => _ = RemoveLocationAsync((string)path!),
             path => CanMutateLibrary && path is string);
         Locations = new(data.Locations);
+        _isInitialLibraryLoad = Locations.Count > 0;
         _visibleVideos = (ListCollectionView)CollectionViewSource.GetDefaultView(Videos);
         _visibleVideos.Filter = item =>
             MatchesVisibleConditions((VideoItemViewModel)item);
@@ -177,6 +178,17 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private bool _isInitialLibraryLoad;
+    public bool IsLibraryLoading =>
+        _isInitialLibraryLoad || IsScanning || IsChangingLocations;
+
+    private bool _hasCompletedLibraryScan;
+    public bool HasCompletedLibraryScan
+    {
+        get => _hasCompletedLibraryScan;
+        private set => Set(ref _hasCompletedLibraryScan, value);
+    }
+
     private bool _isScanning;
     public bool IsScanning
     {
@@ -186,6 +198,7 @@ public sealed class MainViewModel : ViewModelBase
             if (Set(ref _isScanning, value))
             {
                 Raise(nameof(CanMutateLibrary));
+                Raise(nameof(IsLibraryLoading));
                 RefreshCommandStates();
             }
         }
@@ -200,6 +213,7 @@ public sealed class MainViewModel : ViewModelBase
             if (Set(ref _isChangingLocations, value))
             {
                 Raise(nameof(CanMutateLibrary));
+                Raise(nameof(IsLibraryLoading));
                 RefreshCommandStates();
             }
         }
@@ -264,7 +278,8 @@ public sealed class MainViewModel : ViewModelBase
         get => _lastScanUtc;
         private set
         {
-            if (Set(ref _lastScanUtc, value)) Raise(nameof(LastScanText));
+            if (!Set(ref _lastScanUtc, value)) return;
+            Raise(nameof(LastScanText));
         }
     }
 
@@ -342,14 +357,35 @@ public sealed class MainViewModel : ViewModelBase
 
         if (Locations.Count > 0)
         {
-            await ScanAsync();
+            ApplyCurrentVideos(_data.VideosByPath.Keys.Where(path =>
+                _data.Locations.Any(location => IsWithinLocation(path, location))));
+            await ScanAsync(preserveFeatured: true);
+        }
+
+        if (_isInitialLibraryLoad)
+        {
+            _isInitialLibraryLoad = false;
+            Raise(nameof(IsLibraryLoading));
         }
     }
 
-    public async Task ScanAsync()
+    private static bool IsWithinLocation(string path, string location)
+    {
+        var relative = Path.GetRelativePath(location, path);
+        return !Path.IsPathRooted(relative)
+            && !relative.Equals("..", StringComparison.Ordinal)
+            && !relative.StartsWith(
+                $"..{Path.DirectorySeparatorChar}",
+                StringComparison.Ordinal);
+    }
+
+    public Task ScanAsync() => ScanAsync(false);
+
+    private async Task ScanAsync(bool preserveFeatured)
     {
         if (IsScanning || IsRecordingPlayback) return;
         IsScanning = true;
+        HasCompletedLibraryScan = false;
         try
         {
             var result = await _scanner.ScanAsync(
@@ -384,10 +420,10 @@ public sealed class MainViewModel : ViewModelBase
             }
 
             _data = nextData;
-            ApplyCurrentVideos(result.Videos.Keys);
+            ApplyCurrentVideos(result.Videos.Keys, preserveFeatured);
             ReplaceWarnings(result.Warnings);
             LastScanUtc = _utcNow();
-            FeaturedVideo = PickFeatured();
+            HasCompletedLibraryScan = true;
             var summary = _metadataEnrichment is null
                 ? new MetadataRunSummary(0, 0, 0, false)
                 : await _metadataEnrichment.EnrichAsync(
@@ -524,7 +560,7 @@ public sealed class MainViewModel : ViewModelBase
             {
                 await _store.SaveAsync(next);
                 _data = next;
-                video.Update(updated, _store);
+                video.Update(updated);
                 if (IsSeasonView) RefreshLibraryView(false);
                 StatusMessage = "영상을 기본 앱으로 실행했습니다.";
             }
@@ -596,7 +632,8 @@ public sealed class MainViewModel : ViewModelBase
             _data = next;
             var video = Videos.Single(video =>
                 video.Path.Equals(editor.Path, StringComparison.OrdinalIgnoreCase));
-            video.Update(updated, _store);
+            video.Update(updated);
+            await video.LoadPosterAsync();
             RefreshLibraryView(true);
 
             if (!string.Equals(
@@ -640,7 +677,8 @@ public sealed class MainViewModel : ViewModelBase
         _data = next;
         var video = Videos.Single(item =>
             item.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-        video.Update(updated, _store);
+        video.Update(updated);
+        await video.LoadPosterAsync();
         RefreshLibraryView(true);
 
         if (!string.Equals(
@@ -662,7 +700,9 @@ public sealed class MainViewModel : ViewModelBase
             + $"실패 {progress.Failed} · {Path.GetFileName(progress.Path)}";
     }
 
-    private void ApplyCurrentVideos(IEnumerable<string> currentPaths)
+    private void ApplyCurrentVideos(
+        IEnumerable<string> currentPaths,
+        bool preserveFeatured = false)
     {
         var current = currentPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var existing = Videos.ToDictionary(video => video.Path, StringComparer.OrdinalIgnoreCase);
@@ -671,7 +711,7 @@ public sealed class MainViewModel : ViewModelBase
             var record = _data.VideosByPath[path];
             if (existing.TryGetValue(path, out var item))
             {
-                item.Update(record, _store);
+                item.Update(record);
             }
             else
             {
@@ -686,6 +726,23 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         RefreshLibraryView(true);
+        if (!preserveFeatured
+            || FeaturedVideo is null
+            || !current.Contains(FeaturedVideo.Path))
+            FeaturedVideo = PickFeatured();
+        var posterItems = Videos.Where(video => video.NeedsPosterLoad).ToArray();
+        if (posterItems.Length > 0) _ = LoadPostersAsync(posterItems);
+    }
+
+    internal async Task LoadPostersAsync(VideoItemViewModel[] videos)
+    {
+        foreach (var video in videos)
+        {
+            if (!Videos.Contains(video)) continue;
+            await video.LoadPosterAsync();
+        }
+
+        if (videos.Any(Videos.Contains)) RefreshLibraryView(false);
     }
 
     private void ReplaceWarnings(IEnumerable<ScanWarning> warnings)

@@ -721,7 +721,7 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public void SeasonItem_UsesMatchedOrderForTextAndWholeGroupForPoster()
+    public async Task SeasonItem_UsesMatchedOrderForTextAndWholeGroupForPoster()
     {
         var root = Directory.CreateTempSubdirectory("dabom-season-item-");
         try
@@ -750,6 +750,7 @@ public sealed class MainViewModelTests
                 @"D:\Series\Third.mkv",
                 first.Record with { SeriesTitle = "다른 표시명" },
                 store);
+            await hiddenPoster.LoadPosterAsync();
             var key = SeasonGroupKey.From(first.Record)!;
 
             var season = new SeasonItemViewModel(
@@ -2216,6 +2217,7 @@ public sealed class MainViewModelTests
                 var poster = vm.Videos.Single().Record.Poster;
                 StringAssert.StartsWith(poster, "posters/");
                 Assert.IsTrue(File.Exists(store.ResolvePosterPath(poster)));
+                Assert.IsTrue(vm.Videos.Single().HasPoster);
             }
             finally
             {
@@ -2525,6 +2527,200 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task VideoItem_LoadsPosterAfterConstructionWhenRequested()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-deferred-poster-");
+        try
+        {
+            var posters = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "posters"));
+            WritePng(Path.Combine(posters.FullName, "movie.png"));
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { Poster = "posters/movie.png" },
+                new LibraryStore(root.FullName));
+
+            Assert.IsNull(item.Poster);
+            Assert.IsFalse(item.HasPoster);
+
+            await item.LoadPosterAsync();
+
+            Assert.IsNotNull(item.Poster);
+            Assert.IsTrue(item.HasPoster);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task VideoItem_RetriesPosterAfterMissingFileAppears()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-poster-retry-");
+        try
+        {
+            var posters = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "posters"));
+            var posterPath = Path.Combine(posters.FullName, "movie.png");
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { Poster = "posters/movie.png" },
+                new LibraryStore(root.FullName));
+
+            await item.LoadPosterAsync();
+            Assert.IsFalse(item.HasPoster);
+
+            WritePng(posterPath);
+            await item.LoadPosterAsync();
+
+            Assert.IsTrue(item.HasPoster);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoadPostersAsync_SkipsVideosNoLongerInTheLibrary()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-poster-skip-");
+        try
+        {
+            var posters = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "posters"));
+            WritePng(Path.Combine(posters.FullName, "current.png"));
+            WritePng(Path.Combine(posters.FullName, "removed.png"));
+            var store = new LibraryStore(root.FullName);
+            var current = new VideoItemViewModel(
+                @"D:\Current.mkv",
+                new VideoRecord { Poster = "posters/current.png" },
+                store);
+            var removed = new VideoItemViewModel(
+                @"D:\Removed.mkv",
+                new VideoRecord { Poster = "posters/removed.png" },
+                store);
+            var vm = CreateViewModel(store, new StubScanner(), new LibraryData());
+            vm.Videos.Add(current);
+
+            await vm.LoadPostersAsync([current, removed]);
+
+            Assert.IsTrue(current.HasPoster);
+            Assert.IsFalse(removed.HasPoster);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_ShowsActiveCachedVideosBeforeScanCompletes()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-initialize-cache-");
+        try
+        {
+            var location = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Movies")).FullName;
+            var cachedPath = Path.Combine(location, "Cached.mkv");
+            var inactivePath = Path.Combine(root.FullName, "Old", "Inactive.mkv");
+            var scanner = new BlockingScanner(cachedPath);
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                scanner,
+                CachedData(location, cachedPath, inactivePath));
+            Assert.IsTrue(vm.IsLibraryLoading);
+            var initialization = vm.InitializeAsync(null);
+
+            try
+            {
+                await scanner.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+                Assert.IsFalse(initialization.IsCompleted);
+                Assert.AreEqual(1, vm.Videos.Count);
+                Assert.AreEqual(Path.GetFullPath(cachedPath), vm.Videos.Single().Path);
+                Assert.AreEqual(1, vm.DisplayItemCount);
+                Assert.AreSame(vm.Videos.Single(), vm.FeaturedVideo);
+                Assert.IsTrue(vm.IsLibraryLoading);
+            }
+            finally
+            {
+                scanner.Complete();
+                await initialization;
+            }
+
+            Assert.IsFalse(vm.IsLibraryLoading);
+            Assert.IsTrue(vm.HasCompletedLibraryScan);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task InitializeAsync_PreservesCachedFeaturedAfterScanCompletes()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-featured-cache-");
+        try
+        {
+            var location = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Movies")).FullName;
+            var firstPath = Path.Combine(location, "First.mkv");
+            var secondPath = Path.Combine(location, "Second.mkv");
+            var scanner = new BlockingScanner(firstPath, secondPath);
+            var pickCalls = 0;
+            var vm = new MainViewModel(
+                new LibraryStore(root.FullName),
+                scanner,
+                CachedData(location, firstPath, secondPath),
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                maximum => pickCalls++ == 0 ? 0 : maximum - 1);
+            var initialization = vm.InitializeAsync(null);
+
+            await scanner.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            var cachedFeatured = vm.FeaturedVideo;
+            scanner.Complete();
+            await initialization;
+
+            Assert.AreEqual(Path.GetFullPath(firstPath), cachedFeatured!.Path);
+            Assert.AreSame(cachedFeatured, vm.FeaturedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenRefreshFails_DoesNotKeepCompletedLibraryState()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-scan-state-");
+        try
+        {
+            var location = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Movies")).FullName;
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new SuccessThenFailScanner(),
+                new LibraryData { Locations = [location] });
+            await vm.InitializeAsync(null);
+            Assert.IsTrue(vm.HasCompletedLibraryScan);
+
+            await vm.ScanAsync();
+
+            Assert.IsFalse(vm.IsLibraryLoading);
+            Assert.IsFalse(vm.HasCompletedLibraryScan);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task FilterEmptyState_DistinguishesMetadataCompleteFromSearchCombination()
     {
         var root = Directory.CreateTempSubdirectory("dabom-filter-empty-");
@@ -2803,6 +2999,26 @@ public sealed class MainViewModelTests
         }
     }
 
+    private sealed class BlockingScanner(params string[] paths) : ILibraryScanner
+    {
+        private readonly TaskCompletionSource<ScanResult> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<ScanResult> ScanAsync(
+            IReadOnlyList<string> locations,
+            IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            return _completion.Task.WaitAsync(cancellationToken);
+        }
+
+        public void Complete() => _completion.TrySetResult(Scan(paths));
+    }
+
     private sealed class TimestampScanner(
         params (string Path, DateTimeOffset LastWriteTimeUtc)[] entries)
         : ILibraryScanner
@@ -2833,6 +3049,19 @@ public sealed class MainViewModelTests
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
             CancellationToken cancellationToken) =>
             Task.FromResult(_results.Dequeue());
+    }
+
+    private sealed class SuccessThenFailScanner : ILibraryScanner
+    {
+        private int _calls;
+
+        public Task<ScanResult> ScanAsync(
+            IReadOnlyList<string> locations,
+            IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            CancellationToken cancellationToken) =>
+            ++_calls == 1
+                ? Task.FromResult(new ScanResult(new Dictionary<string, ScannedVideo>(), []))
+                : Task.FromException<ScanResult>(new IOException("scan failed"));
     }
 
     private sealed class ResponseHandler(
