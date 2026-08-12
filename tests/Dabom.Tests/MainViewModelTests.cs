@@ -1202,6 +1202,184 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void ScanAsync_NewVideo_WithCompleteMetadataRequestsSuccessToast()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory(
+                "dabom-new-metadata-success-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(sourcePoster);
+                using var imageClient = new HttpClient(new ResponseHandler(_ =>
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                    }));
+                var store = new LibraryStore(root.FullName);
+                var provider = TestProvider.ForMovie(MovieDetails(
+                    "메타데이터 제목",
+                    "1",
+                    new Uri("https://image.tmdb.org/poster.png")));
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    new LibraryData { Locations = [root.FullName] });
+                var toasts = new List<string>();
+                vm.ToastRequested += (_, message) => toasts.Add(message);
+
+                await vm.ScanAsync();
+
+                CollectionAssert.AreEqual(
+                    new[] { "“메타데이터 제목”이 추가되었습니다." },
+                    toasts);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void ScanAsync_NewVideo_WhenMetadataFailsRequestsFailureToast()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory(
+                "dabom-new-metadata-failure-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var store = new LibraryStore(root.FullName);
+                using var imageClient = new HttpClient();
+                var provider = TestProvider.ForMovie(
+                    MovieDetails("메타데이터 제목", "1"));
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    new LibraryData { Locations = [root.FullName] });
+                var toasts = new List<string>();
+                vm.ToastRequested += (_, message) => toasts.Add(message);
+
+                await vm.ScanAsync();
+
+                CollectionAssert.AreEqual(
+                    new[]
+                    {
+                        $"“{Path.GetFileName(path)}”의 메타데이터 수집에 실패했습니다."
+                    },
+                    toasts);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void ScanAsync_NewVideo_WhenMetadataCommitFailsRequestsOnlySaveFailureToast()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory(
+                "dabom-new-metadata-save-failure-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(sourcePoster);
+                var commits = 0;
+                var store = new LibraryStore(
+                    root.FullName,
+                    (temporary, destination, _) =>
+                    {
+                        commits++;
+                        if (commits == 2) throw new IOException("disk full");
+                        File.Move(temporary, destination);
+                        return Task.CompletedTask;
+                    });
+                using var imageClient = new HttpClient(new ResponseHandler(_ =>
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                    }));
+                var provider = TestProvider.ForMovie(MovieDetails(
+                    "메타데이터 제목",
+                    "1",
+                    new Uri("https://image.tmdb.org/poster.png")));
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(store, imageClient, provider),
+                    new LibraryData { Locations = [root.FullName] });
+                var toasts = new List<string>();
+                vm.ToastRequested += (_, message) => toasts.Add(message);
+
+                await vm.ScanAsync();
+
+                Assert.AreEqual(
+                    MetadataStatus.Pending,
+                    vm.Videos.Single().Record.MetadataStatus);
+                var reloaded = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+                Assert.AreEqual(
+                    MetadataStatus.Pending,
+                    reloaded.VideosByPath[Path.GetFullPath(path)].MetadataStatus);
+                CollectionAssert.AreEqual(
+                    new[]
+                    {
+                        $"“{Path.GetFileName(path)}”을 라이브러리에 저장하지 못했습니다."
+                    },
+                    toasts);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_NewVideo_ExistingFailedRetryDoesNotRequestAddedToast()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-existing-metadata-retry-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                MetadataStatus = MetadataStatus.Failed
+            };
+            var store = new LibraryStore(root.FullName);
+            using var imageClient = new HttpClient();
+            var provider = TestProvider.ForMovie(MovieDetails("메타데이터 제목", "1"));
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(MetadataStatus.Matched, vm.Videos.Single().Record.MetadataStatus);
+            Assert.AreEqual(0, toasts.Count);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void ScanAsync_AfterScanEnrichesPendingAndFailedRecordsSequentially()
     {
         RunOnDispatcher(async () =>
@@ -1211,6 +1389,8 @@ public sealed class MainViewModelTests
             {
                 var first = Path.Combine(root.FullName, "First.Movie.mkv");
                 var second = Path.Combine(root.FullName, "Second.Movie.mkv");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(sourcePoster);
                 var data = CachedData(root.FullName, first);
                 data.VideosByPath[first] = data.VideosByPath[first] with
                 {
@@ -1228,9 +1408,16 @@ public sealed class MainViewModelTests
                         ]);
                     },
                     (candidate, _) => Task.FromResult(
-                        MovieDetails($"적용 {candidate.ResourceId}", candidate.ResourceId)));
+                        MovieDetails(
+                            $"적용 {candidate.ResourceId}",
+                            candidate.ResourceId,
+                            new Uri("https://image.tmdb.org/poster.png"))));
                 var store = new LibraryStore(root.FullName);
-                using var imageClient = new HttpClient();
+                using var imageClient = new HttpClient(new ResponseHandler(_ =>
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                    }));
                 var vm = new MainViewModel(
                     store,
                     new StubScanner(first, second),

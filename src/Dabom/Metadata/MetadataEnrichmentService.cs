@@ -9,7 +9,9 @@ public sealed record MetadataProgress(
     int Total,
     int Matched,
     int NotFound,
-    int Failed);
+    int Failed,
+    MetadataStatus Status,
+    bool CommitSucceeded);
 
 public sealed record MetadataRunSummary(
     int Matched,
@@ -172,7 +174,8 @@ public sealed class MetadataEnrichmentService
         IReadOnlyCollection<string> currentPaths,
         Func<string, VideoRecord, string?, CancellationToken, Task> commitAsync,
         Action<MetadataProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlySet<string>? requiredSuccessPaths = null)
     {
         var targets = currentPaths
             .Where(path => records.TryGetValue(path, out var record)
@@ -191,9 +194,11 @@ public sealed class MetadataEnrichmentService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var current = records[path];
+            var requireSuccess = requiredSuccessPaths?.Contains(path) == true;
             var query = _parser.Parse(path);
             VideoRecord updated;
             string? createdPoster = null;
+            var commitSucceeded = false;
 
             if (query is null)
             {
@@ -305,9 +310,15 @@ public sealed class MetadataEnrichmentService
                     (updated, createdPoster) = await ApplyDetailsAsync(
                         current,
                         selected,
+                        requireSuccess,
                         linked.Token,
                         cancellationToken);
                 }
+            }
+
+            if (requireSuccess && updated.MetadataStatus != MetadataStatus.Matched)
+            {
+                updated = updated with { MetadataStatus = MetadataStatus.Failed };
             }
 
             try
@@ -317,6 +328,7 @@ public sealed class MetadataEnrichmentService
                     updated,
                     createdPoster,
                     cancellationToken);
+                commitSucceeded = true;
                 switch (updated.MetadataStatus)
                 {
                     case MetadataStatus.Matched:
@@ -347,7 +359,9 @@ public sealed class MetadataEnrichmentService
                 targets.Length,
                 matched,
                 notFound,
-                failed));
+                failed,
+                updated.MetadataStatus,
+                commitSucceeded));
         }
 
         return new(matched, notFound, failed, authenticationFailed);
@@ -410,6 +424,7 @@ public sealed class MetadataEnrichmentService
         ApplyDetailsAsync(
             VideoRecord current,
             MetadataDetails details,
+            bool requirePoster,
             CancellationToken linkedToken,
             CancellationToken cancellationToken)
     {
@@ -494,7 +509,9 @@ public sealed class MetadataEnrichmentService
         var poster = current.Poster;
         var posterProtected =
             current.UserEditedFields.Contains(MetadataField.Poster);
-        var posterFailed = !posterProtected && details.PosterFailed;
+        var posterFailed = !posterProtected
+            && (details.PosterFailed
+                || requirePoster && details.PosterUri is null);
         if (!posterProtected && !posterFailed)
         {
             if (details.PosterUri is null)

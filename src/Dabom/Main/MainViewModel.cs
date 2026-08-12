@@ -499,8 +499,9 @@ public sealed class MainViewModel : ViewModelBase
                     _data.VideosByPath,
                     result.Videos.Keys.ToArray(),
                     CommitEnrichedRecordAsync,
-                    ShowMetadataProgress,
-                    CancellationToken.None);
+                    progress => ShowMetadataProgress(progress, newPaths),
+                    CancellationToken.None,
+                    newPaths);
             StatusMessage = summary.AuthenticationFailed
                 ? $"메타데이터 실패 {summary.Failed}건. .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
                 : summary.Matched + summary.NotFound + summary.Failed == 0
@@ -761,12 +762,34 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
-    private void ShowMetadataProgress(MetadataProgress progress)
+    private void ShowMetadataProgress(
+        MetadataProgress progress,
+        IReadOnlySet<string> newPaths)
     {
         StatusMessage =
             $"메타데이터 처리 {progress.Completed}/{progress.Total} · "
             + $"성공 {progress.Matched} · 결과 없음 {progress.NotFound} · "
             + $"실패 {progress.Failed} · {Path.GetFileName(progress.Path)}";
+        if (!newPaths.Contains(progress.Path)) return;
+
+        if (!progress.CommitSucceeded)
+        {
+            RequestToast(
+                $"“{Path.GetFileName(progress.Path)}”을 라이브러리에 저장하지 못했습니다.");
+            return;
+        }
+
+        if (progress.Status == MetadataStatus.Matched)
+        {
+            var video = Videos.Single(item => item.Path.Equals(
+                progress.Path,
+                StringComparison.OrdinalIgnoreCase));
+            RequestToast($"“{video.DisplayTitle}”이 추가되었습니다.");
+            return;
+        }
+
+        RequestToast(
+            $"“{Path.GetFileName(progress.Path)}”의 메타데이터 수집에 실패했습니다.");
     }
 
     private void ApplyCurrentVideos(

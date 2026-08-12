@@ -706,6 +706,69 @@ public sealed class MetadataEnrichmentServiceTests
     }
 
     [TestMethod]
+    public async Task EnrichAsync_RequiredSuccessPathWithoutPosterCommitsFailed()
+    {
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("메타데이터 제목", "1"));
+
+        var result = await RunSingleAsync(
+            [provider],
+            "Movie.mkv",
+            requireSuccess: true);
+
+        Assert.AreEqual(MetadataStatus.Failed, result.Record.MetadataStatus);
+        Assert.AreEqual(MetadataStatus.Failed, result.Progress.Status);
+        Assert.IsTrue(result.Progress.CommitSucceeded);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_WhenCommitFailsReportsCommitFailureOnce()
+    {
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("메타데이터 제목", "1"));
+        var records = Records(("Movie.mkv", MetadataStatus.Pending));
+        var progress = new List<MetadataProgress>();
+
+        var summary = await CreateService(provider).EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, _, _, _) => Task.FromException(new IOException("disk full")),
+            progress.Add,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, summary.Failed);
+        Assert.AreEqual(1, progress.Count);
+        Assert.AreEqual(MetadataStatus.Matched, progress.Single().Status);
+        Assert.IsFalse(progress.Single().CommitSucceeded);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_RequiredSuccessPathsConvertEveryNonMatchToFailed()
+    {
+        var noResultProvider = FakeProvider.Empty("empty");
+        var parseFailureProvider = FakeProvider.Empty("parse-failure");
+
+        var noResult = await RunSingleAsync(
+            [noResultProvider],
+            "Unknown.Movie.mkv",
+            requireSuccess: true);
+        var parseFailure = await RunSingleAsync(
+            [parseFailureProvider],
+            "._-().mkv",
+            requireSuccess: true);
+
+        Assert.AreEqual(MetadataStatus.Failed, noResult.Record.MetadataStatus);
+        Assert.AreEqual(0, noResult.Summary.NotFound);
+        Assert.AreEqual(1, noResult.Summary.Failed);
+        Assert.AreEqual(MetadataStatus.Failed, parseFailure.Record.MetadataStatus);
+        Assert.AreEqual(0, parseFailure.Summary.NotFound);
+        Assert.AreEqual(1, parseFailure.Summary.Failed);
+        Assert.AreEqual(0, parseFailureProvider.SearchCalls);
+    }
+
+    [TestMethod]
     public async Task SearchManualAsync_UsesUnknownAndStopsAtFirstProviderWithResults()
     {
         MetadataQuery? received = null;
@@ -865,12 +928,16 @@ public sealed class MetadataEnrichmentServiceTests
             new(providerKey, "episode", "episode-1")
         ]);
 
-    private async Task<(VideoRecord Record, MetadataRunSummary Summary)> RunSingleAsync(
+    private async Task<(
+        VideoRecord Record,
+        MetadataRunSummary Summary,
+        MetadataProgress Progress)> RunSingleAsync(
         IMetadataProvider[] providers,
         string path,
         VideoRecord? current = null,
         HttpClient? imageClient = null,
-        TimeSpan? itemBudget = null)
+        TimeSpan? itemBudget = null,
+        bool requireSuccess = false)
     {
         var fullPath = Path.GetFullPath(path);
         var records = new Dictionary<string, VideoRecord>(
@@ -883,6 +950,7 @@ public sealed class MetadataEnrichmentServiceTests
             }
         };
         VideoRecord? committed = null;
+        var progress = new List<MetadataProgress>();
         var service = itemBudget is null
             ? new MetadataEnrichmentService(
                 new MediaFilenameParser(),
@@ -901,9 +969,10 @@ public sealed class MetadataEnrichmentServiceTests
                 committed = record;
                 return Task.CompletedTask;
             },
-            null,
-            CancellationToken.None);
-        return (committed!, summary);
+            progress.Add,
+            CancellationToken.None,
+            requireSuccess ? records.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase) : null);
+        return (committed!, summary, progress.Single());
     }
 
     private static FakeProvider ProviderReturningAfterCancellation(
