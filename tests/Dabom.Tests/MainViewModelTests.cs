@@ -964,41 +964,53 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task RemoveLocation_PreservesVideoRecordPosterAndOriginalFile()
+    public void RemoveLocation_WhenFollowUpScanFails_HidesInactiveVideoAndPreservesFiles()
     {
-        var root = Directory.CreateTempSubdirectory("dabom-location-preserve-");
-        try
+        RunOnDispatcher(async () =>
         {
-            var location = Directory.CreateDirectory(Path.Combine(root.FullName, "Movies")).FullName;
-            var videoPath = Path.Combine(location, "Movie.mkv");
-            await File.WriteAllBytesAsync(videoPath, [1, 2, 3]);
-            var dataRoot = Directory.CreateDirectory(Path.Combine(root.FullName, "Data")).FullName;
-            var posters = Directory.CreateDirectory(Path.Combine(dataRoot, "posters"));
-            var posterPath = Path.Combine(posters.FullName, "poster.jpg");
-            await File.WriteAllBytesAsync(posterPath, [4, 5, 6]);
-            var data = new LibraryData
+            var root = Directory.CreateTempSubdirectory("dabom-location-preserve-");
+            try
             {
-                Locations = [location],
-                VideosByPath = new(StringComparer.OrdinalIgnoreCase)
+                var location = Directory.CreateDirectory(Path.Combine(root.FullName, "Movies")).FullName;
+                var videoPath = Path.Combine(location, "Movie.mkv");
+                await File.WriteAllBytesAsync(videoPath, [1, 2, 3]);
+                var dataRoot = Directory.CreateDirectory(Path.Combine(root.FullName, "Data")).FullName;
+                var posters = Directory.CreateDirectory(Path.Combine(dataRoot, "posters"));
+                var posterPath = Path.Combine(posters.FullName, "poster.jpg");
+                await File.WriteAllBytesAsync(posterPath, [4, 5, 6]);
+                var data = new LibraryData
                 {
-                    [videoPath] = new() { Title = "보존", Poster = "posters/poster.jpg" }
-                }
-            };
-            var store = new LibraryStore(dataRoot);
-            await store.SaveAsync(data);
-            var vm = CreateViewModel(store, new StubScanner(), data);
+                    Locations = [location],
+                    VideosByPath = new(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [videoPath] = new() { Title = "보존", Poster = "posters/poster.jpg" }
+                    }
+                };
+                var store = new LibraryStore(dataRoot);
+                await store.SaveAsync(data);
+                var vm = CreateViewModel(
+                    store,
+                    new SuccessThenFailScanner(Scan(videoPath)),
+                    data);
+                await vm.InitializeAsync(null);
+                vm.SelectedVideo = vm.Videos.Single();
 
-            Assert.IsTrue(await vm.RemoveLocationAsync(location));
+                Assert.IsTrue(await vm.RemoveLocationAsync(location), vm.StatusMessage);
 
-            var reloaded = await new LibraryStore(dataRoot).LoadAsync(CancellationToken.None);
-            Assert.IsTrue(reloaded.VideosByPath.ContainsKey(Path.GetFullPath(videoPath)));
-            Assert.IsTrue(File.Exists(videoPath));
-            Assert.IsTrue(File.Exists(posterPath));
-        }
-        finally
-        {
-            root.Delete(true);
-        }
+                Assert.AreEqual(0, vm.Videos.Count);
+                Assert.IsNull(vm.SelectedVideo);
+                Assert.IsNull(vm.FeaturedVideo);
+                var reloaded = await new LibraryStore(dataRoot).LoadAsync(CancellationToken.None);
+                Assert.IsTrue(reloaded.VideosByPath.ContainsKey(Path.GetFullPath(videoPath)));
+                Assert.IsTrue(File.Exists(videoPath));
+                Assert.IsTrue(File.Exists(posterPath));
+                StringAssert.Contains(vm.StatusMessage, "scan failed");
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
     }
 
     [TestMethod]

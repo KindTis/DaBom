@@ -619,6 +619,8 @@ public sealed class MainViewModel : ViewModelBase
             _data = next;
             Locations.Clear();
             foreach (var location in normalized) Locations.Add(location);
+            ApplyCurrentVideos(_data.VideosByPath.Keys.Where(path =>
+                normalized.Any(location => IsWithinLocation(path, location))));
             await ScanAsync();
             return true;
         }
