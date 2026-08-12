@@ -32,6 +32,11 @@ public sealed record LibraryFilterOption(
     public override string ToString() => Label;
 }
 
+internal sealed record VideoDeletionRequest(
+    VideoItemViewModel Video,
+    VideoFileStatus Status,
+    FileIdentity? Identity);
+
 public sealed class MainViewModel : ViewModelBase
 {
     private readonly LibraryStore _store;
@@ -40,6 +45,8 @@ public sealed class MainViewModel : ViewModelBase
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, int> _pickIndex;
     private readonly MetadataEnrichmentService? _metadataEnrichment;
+    private readonly Func<string, FileProbeResult> _probeFile;
+    private readonly Action<string> _moveToRecycleBin;
     private readonly ListCollectionView _visibleVideos;
     private LibraryData _data;
     private LibraryFilterOption _selectedFilter = new(
@@ -66,7 +73,9 @@ public sealed class MainViewModel : ViewModelBase
         Func<string, bool> launch,
         Func<DateTimeOffset> utcNow,
         Func<int, int> pickIndex,
-        MetadataEnrichmentService? metadataEnrichment = null)
+        MetadataEnrichmentService? metadataEnrichment = null,
+        Func<string, FileProbeResult>? probeFile = null,
+        Action<string>? moveToRecycleBin = null)
     {
         _store = store;
         _scanner = scanner;
@@ -75,6 +84,8 @@ public sealed class MainViewModel : ViewModelBase
         _utcNow = utcNow;
         _pickIndex = pickIndex;
         _metadataEnrichment = metadataEnrichment;
+        _probeFile = probeFile ?? WindowsFileOperations.Probe;
+        _moveToRecycleBin = moveToRecycleBin ?? WindowsFileOperations.MoveToRecycleBin;
         RescanCommand = new AsyncRelayCommand(ScanAsync, () => CanMutateLibrary);
         PlayCommand = new AsyncRelayCommand(
             () => SelectedVideo is null ? Task.CompletedTask : PlayAsync(SelectedVideo),
@@ -236,8 +247,26 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private bool _isDeleting;
+    public bool IsDeleting
+    {
+        get => _isDeleting;
+        private set
+        {
+            if (Set(ref _isDeleting, value))
+            {
+                Raise(nameof(CanMutateLibrary));
+                RefreshCommandStates();
+            }
+        }
+    }
+
     public bool CanMutateLibrary =>
-        _store.CanSave && !IsScanning && !IsChangingLocations && !IsRecordingPlayback;
+        _store.CanSave
+        && !IsScanning
+        && !IsChangingLocations
+        && !IsRecordingPlayback
+        && !IsDeleting;
 
     public void NotifyMissingSelection()
     {
@@ -597,6 +626,83 @@ public sealed class MainViewModel : ViewModelBase
         finally
         {
             IsChangingLocations = false;
+        }
+    }
+
+    internal VideoDeletionRequest? PrepareVideoDeletion()
+    {
+        if (!CanMutateLibrary || SelectedVideo is null) return null;
+
+        var video = SelectedVideo;
+        var current = _probeFile(video.Path);
+        if (current.Status is not (VideoFileStatus.Present or VideoFileStatus.Missing)
+            || current.Status == VideoFileStatus.Present && current.Identity is null)
+        {
+            RequestToast("파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
+            return null;
+        }
+
+        return new(video, current.Status, current.Identity);
+    }
+
+    internal async Task<bool> DeleteVideoAsync(VideoDeletionRequest request)
+    {
+        if (!CanMutateLibrary || !Videos.Contains(request.Video)) return false;
+
+        IsDeleting = true;
+        try
+        {
+            var current = _probeFile(request.Video.Path);
+            if (!SameDeletionTarget(request, current))
+            {
+                RequestToast("파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
+                return false;
+            }
+
+            var next = RemoveRecord(request.Video.Path);
+            var moved = false;
+            if (current.Status == VideoFileStatus.Present)
+            {
+                try
+                {
+                    _moveToRecycleBin(request.Video.Path);
+                    moved = true;
+                }
+                catch
+                {
+                    RequestToast(
+                        $"“{Path.GetFileName(request.Video.Path)}”을 휴지통으로 이동하지 못했습니다.");
+                    return false;
+                }
+            }
+
+            try
+            {
+                await _store.SaveAsync(next);
+            }
+            catch
+            {
+                if (moved)
+                {
+                    request.Video.FileStatus = VideoFileStatus.Missing;
+                    RequestToast(
+                        $"“{Path.GetFileName(request.Video.Path)}” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.");
+                }
+                else
+                {
+                    RequestToast(
+                        $"“{Path.GetFileName(request.Video.Path)}”을 영상 목록에서 제거하지 못했습니다.");
+                }
+                return false;
+            }
+
+            _data = next;
+            RemoveVideoFromScreen(request.Video);
+            return true;
+        }
+        finally
+        {
+            IsDeleting = false;
         }
     }
 
@@ -1039,6 +1145,35 @@ public sealed class MainViewModel : ViewModelBase
             left.Genre,
             right.Genre,
             StringComparison.CurrentCultureIgnoreCase);
+
+    private static bool SameDeletionTarget(
+        VideoDeletionRequest request,
+        FileProbeResult current) =>
+        request.Status == current.Status
+        && request.Status switch
+        {
+            VideoFileStatus.Missing => true,
+            VideoFileStatus.Present => request.Identity is not null
+                && request.Identity == current.Identity,
+            _ => false
+        };
+
+    private LibraryData RemoveRecord(string path)
+    {
+        var records = new Dictionary<string, VideoRecord>(
+            _data.VideosByPath,
+            StringComparer.OrdinalIgnoreCase);
+        records.Remove(path);
+        return _data with { VideosByPath = records };
+    }
+
+    private void RemoveVideoFromScreen(VideoItemViewModel video)
+    {
+        if (ReferenceEquals(SelectedVideo, video)) SelectedVideo = null;
+        Videos.Remove(video);
+        RefreshLibraryView(true);
+        if (ReferenceEquals(FeaturedVideo, video)) FeaturedVideo = PickFeatured();
+    }
 
     private VideoItemViewModel? PickFeatured()
     {

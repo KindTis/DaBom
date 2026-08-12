@@ -171,6 +171,64 @@ public sealed class CommandStateTests
     }
 
     [TestMethod]
+    public void DeletionSave_DisablesMutatingCommandsUntilCompletion()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-command-delete-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                var started = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var release = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var store = new LibraryStore(
+                    root.FullName,
+                    async (temporary, destination, _) =>
+                    {
+                        started.TrySetResult();
+                        await release.Task;
+                        File.Move(temporary, destination, true);
+                    });
+                var identity = new FileIdentity(7, 10, 20);
+                var vm = new MainViewModel(
+                    store,
+                    new ImmediateScanner(path),
+                    data,
+                    _ => true,
+                    () => DateTimeOffset.UtcNow,
+                    _ => 0,
+                    null,
+                    _ => new(VideoFileStatus.Present, identity),
+                    _ => { });
+                await vm.ScanAsync();
+                vm.SelectedVideo = vm.Videos.Single();
+                var request = vm.PrepareVideoDeletion();
+
+                var deletion = vm.DeleteVideoAsync(request!);
+                await started.Task;
+
+                Assert.IsTrue(vm.IsDeleting);
+                Assert.IsFalse(vm.CanMutateLibrary);
+                AssertCommandsDisabled(vm, root.FullName);
+
+                release.TrySetResult();
+                Assert.IsTrue(await deletion);
+                Assert.IsFalse(vm.IsDeleting);
+                Assert.IsTrue(vm.CanMutateLibrary);
+                Assert.IsTrue(vm.RescanCommand.CanExecute(null));
+                Assert.IsTrue(vm.RemoveLocationCommand.CanExecute(root.FullName));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
     public async Task StoreReadFailure_DisablesCommandsAndKeepsWarningWhenSelectionIsMissing()
     {
         var root = Directory.CreateTempSubdirectory("dabom-command-disabled-");

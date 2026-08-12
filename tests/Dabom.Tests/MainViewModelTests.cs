@@ -3287,6 +3287,472 @@ public sealed class MainViewModelTests
         }
     }
 
+    [TestMethod]
+    public void DeleteVideo_PresentSameIdentity_RecyclesSavesAndRemovesFromScreenInOrder()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-delete-present-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                var calls = new List<string>();
+                var identity = new FileIdentity(7, 10, 20);
+                var probe = ProbeSequence(
+                    calls,
+                    new FileProbeResult(VideoFileStatus.Present, identity),
+                    new FileProbeResult(VideoFileStatus.Present, identity));
+                var store = new LibraryStore(root.FullName, (temporary, destination, _) =>
+                {
+                    calls.Add("save");
+                    File.Move(temporary, destination, true);
+                    return Task.CompletedTask;
+                });
+                var vm = await CreateDeletionViewModel(
+                    store,
+                    new StubScanner(path),
+                    data,
+                    probe,
+                    recycledPath =>
+                    {
+                        Assert.AreEqual(path, recycledPath);
+                        calls.Add("recycle");
+                    });
+                var video = vm.SelectedVideo!;
+
+                var request = vm.PrepareVideoDeletion();
+                var deleted = await vm.DeleteVideoAsync(request!);
+
+                Assert.IsTrue(deleted);
+                CollectionAssert.AreEqual(
+                    new[] { "probe", "probe", "recycle", "save" },
+                    calls);
+                Assert.IsFalse(vm.Videos.Contains(video));
+                Assert.IsFalse(vm.VisibleItems.Contains(video));
+                Assert.IsNull(vm.SelectedVideo);
+                var saved = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+                Assert.IsFalse(saved.VideosByPath.ContainsKey(path));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void DeleteVideo_Missing_SavesListWithoutRecycle()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-delete-missing-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var data = CachedData(root.FullName, path);
+                var calls = new List<string>();
+                var probe = ProbeSequence(
+                    calls,
+                    new FileProbeResult(VideoFileStatus.Missing, null),
+                    new FileProbeResult(VideoFileStatus.Missing, null));
+                var store = new LibraryStore(root.FullName, (temporary, destination, _) =>
+                {
+                    calls.Add("save");
+                    File.Move(temporary, destination, true);
+                    return Task.CompletedTask;
+                });
+                var vm = await CreateDeletionViewModel(
+                    store,
+                    new StubScanner(path),
+                    data,
+                    probe,
+                    _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
+
+                var request = vm.PrepareVideoDeletion();
+                var deleted = await vm.DeleteVideoAsync(request!);
+
+                Assert.IsTrue(deleted);
+                CollectionAssert.AreEqual(new[] { "probe", "probe", "save" }, calls);
+                Assert.AreEqual(0, vm.Videos.Count);
+                var saved = await new LibraryStore(root.FullName)
+                    .LoadAsync(CancellationToken.None);
+                Assert.IsFalse(saved.VideosByPath.ContainsKey(path));
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public void DeleteVideo_NonFeaturedVideo_PreservesFeaturedVideo()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-delete-featured-");
+            try
+            {
+                var first = Path.Combine(root.FullName, "First.mkv");
+                var second = Path.Combine(root.FullName, "Second.mkv");
+                var third = Path.Combine(root.FullName, "Third.mkv");
+                var pickerCalls = 0;
+                var store = new LibraryStore(root.FullName);
+                var probe = new FileProbeResult(VideoFileStatus.Missing, null);
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(first, second, third),
+                    CachedData(root.FullName, first, second, third),
+                    _ => true,
+                    () => DateTimeOffset.UtcNow,
+                    _ => pickerCalls++ == 0 ? 0 : 1,
+                    null,
+                    _ => probe,
+                    _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
+                await vm.ScanAsync();
+                var featured = vm.FeaturedVideo;
+                vm.SelectedVideo = vm.Videos[2];
+
+                var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+
+                Assert.IsTrue(deleted);
+                Assert.AreSame(featured, vm.FeaturedVideo);
+                Assert.AreEqual(1, pickerCalls);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
+    public async Task PrepareVideoDeletion_LastScanPresentButLiveMissing_PreparesListOnlyRequest()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-live-missing-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var calls = new List<string>();
+            var vm = await CreateDeletionViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(path),
+                CachedData(root.FullName, path),
+                ProbeSequence(calls, new FileProbeResult(VideoFileStatus.Missing, null)),
+                _ => Assert.Fail());
+            Assert.AreEqual(VideoFileStatus.Present, vm.SelectedVideo!.FileStatus);
+
+            var request = vm.PrepareVideoDeletion();
+
+            Assert.IsNotNull(request);
+            Assert.AreSame(vm.SelectedVideo, request.Video);
+            Assert.AreEqual(VideoFileStatus.Missing, request.Status);
+            Assert.IsNull(request.Identity);
+            CollectionAssert.AreEqual(new[] { "probe" }, calls);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task PrepareVideoDeletion_LastScanMissingButLivePresent_PreparesIdentityRequest()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-live-present-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var identity = new FileIdentity(7, 10, 20);
+            var calls = new List<string>();
+            var vm = await CreateDeletionViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(),
+                CachedData(root.FullName, path),
+                ProbeSequence(calls, new FileProbeResult(VideoFileStatus.Present, identity)),
+                _ => Assert.Fail());
+            Assert.AreEqual(VideoFileStatus.Missing, vm.SelectedVideo!.FileStatus);
+
+            var request = vm.PrepareVideoDeletion();
+
+            Assert.IsNotNull(request);
+            Assert.AreEqual(VideoFileStatus.Present, request.Status);
+            Assert.AreEqual(identity, request.Identity);
+            CollectionAssert.AreEqual(new[] { "probe" }, calls);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(VideoFileStatus.Missing, 7L, 10L, 20L)]
+    [DataRow(VideoFileStatus.Present, 8L, 10L, 20L)]
+    [DataRow(VideoFileStatus.Present, 7L, 11L, 20L)]
+    [DataRow(VideoFileStatus.Present, 7L, 10L, 21L)]
+    public async Task DeleteVideo_TargetChanges_DoesNothingAndRequestsRetry(
+        VideoFileStatus currentStatus,
+        long currentVolume,
+        long currentLow,
+        long currentHigh)
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-changed-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var calls = new List<string>();
+            var currentIdentity = currentStatus == VideoFileStatus.Present
+                ? new FileIdentity(
+                    (ulong)currentVolume,
+                    (ulong)currentLow,
+                    (ulong)currentHigh)
+                : null;
+            var probe = ProbeSequence(
+                calls,
+                new FileProbeResult(VideoFileStatus.Present, new(7, 10, 20)),
+                new FileProbeResult(currentStatus, currentIdentity));
+            var store = new LibraryStore(root.FullName, (_, _, _) =>
+            {
+                calls.Add("save");
+                return Task.CompletedTask;
+            });
+            var vm = await CreateDeletionViewModel(
+                store,
+                new StubScanner(path),
+                CachedData(root.FullName, path),
+                probe,
+                _ => calls.Add("recycle"));
+            string? toast = null;
+            vm.ToastRequested += (_, message) => toast = message;
+
+            var request = vm.PrepareVideoDeletion();
+            var deleted = await vm.DeleteVideoAsync(request!);
+
+            Assert.IsFalse(deleted);
+            CollectionAssert.AreEqual(new[] { "probe", "probe" }, calls);
+            Assert.AreEqual(1, vm.Videos.Count);
+            Assert.AreEqual(
+                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
+                toast);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(VideoFileStatus.Unknown)]
+    [DataRow(VideoFileStatus.Unavailable)]
+    [DataRow(VideoFileStatus.Present)]
+    public async Task PrepareVideoDeletion_UncertainLiveStatus_RejectsAndRequestsRetry(
+        VideoFileStatus status)
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-uncertain-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var calls = new List<string>();
+            var vm = await CreateDeletionViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(path),
+                CachedData(root.FullName, path),
+                ProbeSequence(calls, new FileProbeResult(status, null)),
+                _ => Assert.Fail());
+            string? toast = null;
+            vm.ToastRequested += (_, message) => toast = message;
+
+            var request = vm.PrepareVideoDeletion();
+
+            Assert.IsNull(request);
+            CollectionAssert.AreEqual(new[] { "probe" }, calls);
+            Assert.AreEqual(
+                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
+                toast);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DeleteVideo_RecycleFails_PreservesJsonAndScreen()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-recycle-fail-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var calls = new List<string>();
+            var identity = new FileIdentity(7, 10, 20);
+            var store = new LibraryStore(root.FullName, (_, _, _) =>
+            {
+                calls.Add("save");
+                return Task.CompletedTask;
+            });
+            var vm = await CreateDeletionViewModel(
+                store,
+                new StubScanner(path),
+                data,
+                ProbeSequence(
+                    calls,
+                    new FileProbeResult(VideoFileStatus.Present, identity),
+                    new FileProbeResult(VideoFileStatus.Present, identity)),
+                _ =>
+                {
+                    calls.Add("recycle");
+                    throw new IOException("recycle failed");
+                });
+            string? toast = null;
+            vm.ToastRequested += (_, message) => toast = message;
+
+            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+
+            Assert.IsFalse(deleted);
+            CollectionAssert.AreEqual(new[] { "probe", "probe", "recycle" }, calls);
+            Assert.AreEqual(1, vm.Videos.Count);
+            var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+            Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
+            Assert.AreEqual("“Movie.mkv”을 휴지통으로 이동하지 못했습니다.", toast);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DeleteVideo_RecycledButSaveFails_PreservesJsonAndScreenAndMarksRuntimeMissing()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-save-fail-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var calls = new List<string>();
+            var identity = new FileIdentity(7, 10, 20);
+            var store = new LibraryStore(root.FullName, (_, _, _) =>
+            {
+                calls.Add("save");
+                throw new IOException("disk full");
+            });
+            var vm = await CreateDeletionViewModel(
+                store,
+                new StubScanner(path),
+                data,
+                ProbeSequence(
+                    calls,
+                    new FileProbeResult(VideoFileStatus.Present, identity),
+                    new FileProbeResult(VideoFileStatus.Present, identity)),
+                _ => calls.Add("recycle"));
+            string? toast = null;
+            vm.ToastRequested += (_, message) => toast = message;
+
+            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+
+            Assert.IsFalse(deleted);
+            CollectionAssert.AreEqual(
+                new[] { "probe", "probe", "recycle", "save" },
+                calls);
+            Assert.AreEqual(1, vm.Videos.Count);
+            Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
+            var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+            Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
+            Assert.AreEqual(
+                "“Movie.mkv” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.",
+                toast);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DeleteVideo_MissingSaveFails_PreservesJsonAndScreenWithoutRecycle()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-list-fail-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var calls = new List<string>();
+            var store = new LibraryStore(root.FullName, (_, _, _) =>
+            {
+                calls.Add("save");
+                throw new IOException("disk full");
+            });
+            var vm = await CreateDeletionViewModel(
+                store,
+                new StubScanner(path),
+                data,
+                ProbeSequence(
+                    calls,
+                    new FileProbeResult(VideoFileStatus.Missing, null),
+                    new FileProbeResult(VideoFileStatus.Missing, null)),
+                _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
+            string? toast = null;
+            vm.ToastRequested += (_, message) => toast = message;
+
+            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+
+            Assert.IsFalse(deleted);
+            CollectionAssert.AreEqual(new[] { "probe", "probe", "save" }, calls);
+            Assert.AreEqual(1, vm.Videos.Count);
+            Assert.AreEqual(VideoFileStatus.Present, vm.Videos.Single().FileStatus);
+            var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
+            Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
+            Assert.AreEqual(
+                "“Movie.mkv”을 영상 목록에서 제거하지 못했습니다.",
+                toast);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    private static async Task<MainViewModel> CreateDeletionViewModel(
+        LibraryStore store,
+        ILibraryScanner scanner,
+        LibraryData data,
+        Func<string, FileProbeResult> probe,
+        Action<string> recycle)
+    {
+        var vm = new MainViewModel(
+            store,
+            scanner,
+            data,
+            _ => true,
+            () => DateTimeOffset.UtcNow,
+            _ => 0,
+            null,
+            probe,
+            recycle);
+        await vm.ScanAsync();
+        vm.SelectedVideo = vm.Videos.Single();
+        return vm;
+    }
+
+    private static Func<string, FileProbeResult> ProbeSequence(
+        ICollection<string> calls,
+        params FileProbeResult[] results)
+    {
+        var queue = new Queue<FileProbeResult>(results);
+        return _ =>
+        {
+            calls.Add("probe");
+            return queue.Dequeue();
+        };
+    }
+
     private static LibraryFilterOption Filter(
         MainViewModel viewModel,
         LibraryFilterKind kind,
