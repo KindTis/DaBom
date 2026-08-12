@@ -273,6 +273,10 @@ public sealed class MainViewModel : ViewModelBase
         if (CanMutateLibrary) StatusMessage = "먼저 영상을 선택하세요";
     }
 
+    internal void RequestSeasonDeletionGuidance() =>
+        RequestToast(
+            "TV 시즌은 한 번에 삭제할 수 없습니다. 시즌을 열고 개별 영상을 선택하세요.");
+
     public bool OpenSeason(SeasonItemViewModel season)
     {
         if (!VisibleItems.Contains(season)) return false;

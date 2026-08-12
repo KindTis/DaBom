@@ -251,6 +251,51 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void MissingFileCardsDimOnlyPosterAndKeepStatusRibbonOpaque()
+    {
+        var markup = ReadMainWindowMarkup();
+        var videoTemplate = CardTemplate(
+            markup,
+            "<DataTemplate DataType=\"{x:Type main:VideoItemViewModel}\"",
+            "<DataTemplate DataType=\"{x:Type main:SeasonItemViewModel}\"");
+        var seasonTemplate = CardTemplate(
+            markup,
+            "<DataTemplate DataType=\"{x:Type main:SeasonItemViewModel}\"",
+            "</ListBox.Resources>");
+
+        Assert.AreEqual(2, markup.Split("Opacity=\"{Binding PosterOpacity}\"", StringSplitOptions.None).Length - 1);
+        StringAssert.Contains(videoTemplate, "Visibility=\"{Binding IsFileMissing,");
+        StringAssert.Contains(videoTemplate, "Text=\"파일 없음\"");
+        StringAssert.Contains(seasonTemplate, "x:Name=\"SeasonTypeRibbon\"");
+        StringAssert.Contains(seasonTemplate, "Visibility=\"{Binding ContainsMissingFiles,");
+        StringAssert.Contains(seasonTemplate, "Text=\"파일 없음 포함\"");
+
+        AssertPosterPrecedesOpaqueMissingRibbon(videoTemplate);
+        AssertPosterPrecedesOpaqueMissingRibbon(seasonTemplate);
+    }
+
+    [TestMethod]
+    public void DeleteKey_PreparesAndConfirmsVideoDeletionWithoutGlobalHandling()
+    {
+        var code = ReadMainWindowCode();
+        var viewModel = ReadMainViewModelCode();
+        var handler = MethodBody(code, "private async void OnVideoListKeyDown", "private void OnReturnToLibrary");
+        var preview = MethodBody(code, "private void OnPreviewKeyDown", "private void OnMainScrollChanged");
+
+        StringAssert.Contains(handler, "e.Key == Key.Delete");
+        StringAssert.Contains(handler, "viewModel.RequestSeasonDeletionGuidance();");
+        StringAssert.Contains(handler, "PrepareVideoDeletion()");
+        StringAssert.Contains(handler, "MessageBoxButton.OKCancel");
+        StringAssert.Contains(handler, "MessageBoxResult.Cancel");
+        StringAssert.Contains(handler, "await viewModel.DeleteVideoAsync(request)");
+        StringAssert.Contains(viewModel, "internal void RequestSeasonDeletionGuidance() =>");
+        StringAssert.Contains(
+            viewModel,
+            "TV 시즌은 한 번에 삭제할 수 없습니다. 시즌을 열고 개별 영상을 선택하세요.");
+        Assert.IsFalse(preview.Contains("Key.Delete", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void SeasonHero_ExposesContextAndAccessibleReturnControl()
     {
         var markup = ReadMainWindowMarkup();
@@ -895,6 +940,39 @@ public sealed class MainWindowMarkupTests
     {
         var path = Path.Combine(ProjectDirectory(), "MainWindow.xaml.cs");
         return File.ReadAllText(path);
+    }
+
+    private static string ReadMainViewModelCode() =>
+        File.ReadAllText(Path.Combine(ProjectDirectory(), "Main", "MainViewModel.cs"));
+
+    private static string CardTemplate(string markup, string startMarker, string endMarker)
+    {
+        var start = markup.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = markup.IndexOf(endMarker, start, StringComparison.Ordinal);
+        return markup[start..end];
+    }
+
+    private static string MethodBody(string code, string startMarker, string endMarker)
+    {
+        var start = code.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = code.IndexOf(endMarker, start, StringComparison.Ordinal);
+        return code[start..end];
+    }
+
+    private static void AssertPosterPrecedesOpaqueMissingRibbon(string template)
+    {
+        var posterStart = template.IndexOf(
+            "<Border Margin=\"1\" CornerRadius=\"15\"",
+            StringComparison.Ordinal);
+        var posterEnd = template.IndexOf("</Border>", posterStart, StringComparison.Ordinal);
+        var ribbonStart = template.IndexOf(
+            "<Border VerticalAlignment=\"Bottom\"",
+            posterEnd,
+            StringComparison.Ordinal);
+
+        StringAssert.Contains(template[posterStart..posterEnd], "Opacity=\"{Binding PosterOpacity}\"");
+        StringAssert.Contains(template[ribbonStart..], "Background=\"#FFD63C3C\"");
+        Assert.IsFalse(template[posterStart..posterEnd].Contains("#FFD63C3C", StringComparison.Ordinal));
     }
 
     private static string ProjectDirectory() => Path.GetFullPath(Path.Combine(

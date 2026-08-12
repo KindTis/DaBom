@@ -733,7 +733,8 @@
                                         </Style>
                                     </Border.Style>
                                     <Grid>
-                                        <Border Margin="1" CornerRadius="15">
+                                        <Border Margin="1" CornerRadius="15"
+                                                Opacity="{Binding PosterOpacity}">
                                             <Border.Background>
                                                 <ImageBrush ImageSource="{Binding Poster}" Stretch="UniformToFill" />
                                             </Border.Background>
@@ -752,6 +753,17 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
+                                        <Border VerticalAlignment="Bottom"
+                                                Padding="0,7"
+                                                Background="#FFD63C3C"
+                                                Visibility="{Binding IsFileMissing,
+                                                    Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="파일 없음"
+                                                       HorizontalAlignment="Center"
+                                                       Foreground="White"
+                                                       FontSize="12"
+                                                       FontWeight="Bold" />
+                                        </Border>
                                     </Grid>
                                 </Border>
                                 <TextBlock Text="{Binding DisplayTitle}" FontWeight="SemiBold"
@@ -787,7 +799,8 @@
                                         </Style>
                                     </Border.Style>
                                     <Grid>
-                                        <Border Margin="1" CornerRadius="15">
+                                        <Border Margin="1" CornerRadius="15"
+                                                Opacity="{Binding PosterOpacity}">
                                             <Border.Background>
                                                 <ImageBrush ImageSource="{Binding Poster}" Stretch="UniformToFill" />
                                             </Border.Background>
@@ -817,6 +830,17 @@
                                                        HorizontalAlignment="Center"
                                                        Foreground="{StaticResource PageBrush}"
                                                        FontSize="12" FontWeight="Bold" />
+                                        </Border>
+                                        <Border VerticalAlignment="Bottom"
+                                                Padding="0,7"
+                                                Background="#FFD63C3C"
+                                                Visibility="{Binding ContainsMissingFiles,
+                                                    Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="파일 없음 포함"
+                                                       HorizontalAlignment="Center"
+                                                       Foreground="White"
+                                                       FontSize="12"
+                                                       FontWeight="Bold" />
                                         </Border>
                                     </Grid>
                                 </Border>

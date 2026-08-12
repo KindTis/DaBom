@@ -1,3 +1,4 @@
+using Dabom.Library;
 using Dabom.Main;
 using Dabom.Metadata;
 using System.ComponentModel;
@@ -171,9 +172,36 @@ public partial class MainWindow : Window
 
     private async void OnVideoListKeyDown(object sender, KeyEventArgs e)
     {
+        var viewModel = (MainViewModel)DataContext;
+        if (e.Key == Key.Delete)
+        {
+            e.Handled = true;
+            if (viewModel.SelectedItem is SeasonItemViewModel)
+            {
+                viewModel.RequestSeasonDeletionGuidance();
+                return;
+            }
+
+            var request = viewModel.PrepareVideoDeletion();
+            if (request is null) return;
+            var message = request.Status == VideoFileStatus.Present
+                ? $"“{request.Video.FileName}” ({request.Video.Path}) 파일을 휴지통으로 이동하시겠습니까? 파일과 영상 목록에서 제거됩니다."
+                : $"“{request.Video.FileName}” ({request.Video.Path}) 파일이 존재하지 않습니다. 영상 목록에서 제거하시겠습니까?";
+            if (MessageBox.Show(
+                    this,
+                    message,
+                    "영상 삭제",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.Cancel) == MessageBoxResult.OK)
+            {
+                await viewModel.DeleteVideoAsync(request);
+            }
+            return;
+        }
+
         if (e.Key != Key.Enter) return;
         e.Handled = true;
-        var viewModel = (MainViewModel)DataContext;
         if (viewModel.SelectedItem is SeasonItemViewModel season)
         {
             OpenSeason(season);
