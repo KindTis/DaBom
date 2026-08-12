@@ -913,6 +913,20 @@
             </Grid>
         </Grid>
 
+        <StackPanel x:Name="ToastHost"
+                    Panel.ZIndex="20"
+                    Width="360"
+                    Margin="0,0,32,110"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    IsHitTestVisible="False" />
+        <TextBlock x:Name="ToastAnnouncement"
+                   Width="1"
+                   Height="1"
+                   Opacity="0"
+                   IsHitTestVisible="False"
+                   AutomationProperties.LiveSetting="Polite" />
+
         <Popup x:Name="LocationsPopup" Placement="MousePoint" StaysOpen="False"
                AllowsTransparency="True">
             <Border Width="370" Padding="20"

@@ -3,6 +3,8 @@ using Dabom.Main;
 using Dabom.Metadata;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -22,12 +24,23 @@ public partial class MainWindow : Window
     private const double LibraryToolbarBaseline = 18d;
     private const int DoubleClickWidthMetric = 36;
     private const int DoubleClickHeightMetric = 37;
+    private const int MaxVisibleToasts = 5;
+    private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ToastTransition = TimeSpan.FromMilliseconds(200);
 
     private ListBoxItem? _hoveredCard;
     private SeasonGroupKey? _seasonReturnKey;
     private double _seasonReturnOffset;
     private int? _seasonEntryClickTimestamp;
     private Point _seasonEntryClickPosition;
+    private readonly Queue<ToastEntry> _pendingToasts = [];
+    private readonly Dictionary<ToastEntry, FrameworkElement> _toastElements = [];
+    private readonly CancellationTokenSource _toastCancellation = new();
+    private readonly SemaphoreSlim _toastTransitionGate = new(1, 1);
+    private long _nextToastId;
+    private bool _toastPumpRunning;
+
+    private sealed record ToastEntry(long Id, string Message);
 
     internal static int DoubleClickTime => unchecked((int)GetDoubleClickTime());
     internal static double DoubleClickWidth => GetSystemMetrics(DoubleClickWidthMetric);
@@ -46,13 +59,174 @@ public partial class MainWindow : Window
         {
             oldViewModel.MetadataEditRequested -= OnMetadataEditRequested;
             oldViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            oldViewModel.ToastRequested -= OnToastRequested;
         }
         if (e.NewValue is MainViewModel newViewModel)
         {
             newViewModel.MetadataEditRequested += OnMetadataEditRequested;
             newViewModel.PropertyChanged += OnViewModelPropertyChanged;
+            newViewModel.ToastRequested += OnToastRequested;
         }
         _seasonReturnKey = null;
+    }
+
+    private void OnToastRequested(object? sender, string message)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => OnToastRequested(sender, message));
+            return;
+        }
+        if (_toastCancellation.IsCancellationRequested) return;
+
+        _pendingToasts.Enqueue(new ToastEntry(++_nextToastId, message));
+        _ = PumpToastsAsync();
+    }
+
+    private async Task PumpToastsAsync()
+    {
+        if (_toastPumpRunning) return;
+        _toastPumpRunning = true;
+        try
+        {
+            while (!_toastCancellation.IsCancellationRequested
+                && _toastElements.Count < MaxVisibleToasts
+                && _pendingToasts.TryDequeue(out var entry))
+            {
+                await ShowToastAsync(entry, _toastCancellation.Token);
+            }
+        }
+        catch (OperationCanceledException) when (_toastCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _toastPumpRunning = false;
+        }
+    }
+
+    private async Task ShowToastAsync(ToastEntry entry, CancellationToken token)
+    {
+        await _toastTransitionGate.WaitAsync(token);
+        try
+        {
+            var existingElements = _toastElements.Values.ToArray();
+            var element = CreateToastVisual(entry.Message);
+            _toastElements.Add(entry, element);
+            ToastHost.Children.Add(element);
+            ToastHost.UpdateLayout();
+            AnnounceToast(entry.Message);
+            _ = ExpireToastAsync(entry, token);
+
+            if (!SystemParameters.ClientAreaAnimation)
+            {
+                element.Opacity = 1;
+                return;
+            }
+
+            var shift = element.ActualHeight + element.Margin.Top + element.Margin.Bottom;
+            foreach (var existing in existingElements)
+            {
+                AnimateToastOffset(existing, shift);
+            }
+            AnimateToastOffset(element, shift);
+            element.BeginAnimation(OpacityProperty, new DoubleAnimation(
+                0,
+                1,
+                new Duration(ToastTransition)));
+            await Task.Delay(ToastTransition, token);
+        }
+        finally
+        {
+            _toastTransitionGate.Release();
+        }
+    }
+
+    private static void AnimateToastOffset(FrameworkElement element, double shift)
+    {
+        var transform = (TranslateTransform)element.RenderTransform;
+        transform.BeginAnimation(
+            TranslateTransform.YProperty,
+            new DoubleAnimation(shift, 0, new Duration(ToastTransition)));
+    }
+
+    private async Task ExpireToastAsync(ToastEntry entry, CancellationToken token)
+    {
+        try
+        {
+            await ExpireToastCoreAsync(entry, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task ExpireToastCoreAsync(ToastEntry entry, CancellationToken token)
+    {
+        await Task.Delay(ToastLifetime, token);
+        await _toastTransitionGate.WaitAsync(token);
+        try
+        {
+            if (!_toastElements.TryGetValue(entry, out var element)) return;
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                element.BeginAnimation(OpacityProperty, new DoubleAnimation(
+                    1,
+                    0,
+                    new Duration(ToastTransition)));
+                await Task.Delay(ToastTransition, token);
+            }
+            ToastHost.Children.Remove(element);
+            _toastElements.Remove(entry);
+        }
+        finally
+        {
+            _toastTransitionGate.Release();
+        }
+        await PumpToastsAsync();
+    }
+
+    private Border CreateToastVisual(string message) => new()
+    {
+        MaxWidth = 360,
+        Margin = new Thickness(0, 0, 0, 8),
+        Padding = new Thickness(18, 14, 18, 14),
+        Background = (Brush)FindResource("SurfaceBrush"),
+        BorderBrush = (Brush)FindResource("LineBrush"),
+        BorderThickness = new Thickness(1),
+        CornerRadius = (CornerRadius)FindResource("ControlCornerRadius"),
+        IsHitTestVisible = false,
+        RenderTransform = new TranslateTransform(),
+        Child = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)FindResource("TextBrush")
+        }
+    };
+
+    private void AnnounceToast(string message)
+    {
+        ToastAnnouncement.Text = message;
+        var peer = UIElementAutomationPeer.CreatePeerForElement(ToastAnnouncement)
+            ?? new FrameworkElementAutomationPeer(ToastAnnouncement);
+        peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        DataContextChanged -= OnDataContextChanged;
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.MetadataEditRequested -= OnMetadataEditRequested;
+            viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            viewModel.ToastRequested -= OnToastRequested;
+        }
+        _toastCancellation.Cancel();
+        _pendingToasts.Clear();
+        _toastElements.Clear();
+        ToastHost.Children.Clear();
+        base.OnClosed(e);
     }
 
     private void OnViewModelPropertyChanged(

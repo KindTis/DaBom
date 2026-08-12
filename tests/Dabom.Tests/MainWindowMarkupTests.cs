@@ -807,6 +807,89 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void ToastStack_IsBottomRightNonInteractiveAndPolitelyAnnounced()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var host = document
+            .Descendants(presentation + "StackPanel")
+            .SingleOrDefault(element =>
+                (string?)element.Attribute(x + "Name") == "ToastHost");
+        var announcement = document
+            .Descendants(presentation + "TextBlock")
+            .SingleOrDefault(element =>
+                (string?)element.Attribute(x + "Name") == "ToastAnnouncement");
+        Assert.IsNotNull(host, "토스트 스택 호스트가 필요합니다.");
+        Assert.IsNotNull(announcement, "화면 읽기 프로그램용 live region이 필요합니다.");
+        var liveSetting = announcement.Attributes().SingleOrDefault(attribute =>
+            attribute.Name.LocalName == "AutomationProperties.LiveSetting");
+
+        Assert.IsNotNull(liveSetting, "토스트 알림은 live region이어야 합니다.");
+        Assert.AreEqual("Right", (string?)host.Attribute("HorizontalAlignment"));
+        Assert.AreEqual("Bottom", (string?)host.Attribute("VerticalAlignment"));
+        Assert.AreEqual("360", (string?)host.Attribute("Width"));
+        Assert.AreEqual("0,0,32,110", (string?)host.Attribute("Margin"));
+        Assert.AreEqual("False", (string?)host.Attribute("IsHitTestVisible"));
+        Assert.AreEqual("False", (string?)announcement.Attribute("IsHitTestVisible"));
+        Assert.AreEqual("Polite", liveSetting.Value);
+        Assert.IsFalse(host.Descendants().Any(), "토스트 호스트에 포커스 가능한 XAML 컨트롤을 두지 않습니다.");
+    }
+
+    [TestMethod]
+    public void ToastPump_PreservesFifoDuplicatesAndCapsFiveVisibleItems()
+    {
+        var code = ReadMainWindowCode();
+        StringAssert.Contains(code, "private async Task PumpToastsAsync()");
+        StringAssert.Contains(code, "private async Task ShowToastAsync");
+        var pump = MethodBody(
+            code,
+            "private async Task PumpToastsAsync()",
+            "private async Task ShowToastAsync");
+
+        StringAssert.Contains(code, "Queue<ToastEntry>");
+        StringAssert.Contains(code, "Dictionary<ToastEntry, FrameworkElement>");
+        StringAssert.Contains(code, "MaxVisibleToasts = 5");
+        StringAssert.Contains(code, "TimeSpan.FromSeconds(5)");
+        StringAssert.Contains(code, "TimeSpan.FromMilliseconds(200)");
+        StringAssert.Contains(pump, "_toastElements.Count < MaxVisibleToasts");
+        StringAssert.Contains(pump, "_pendingToasts.TryDequeue");
+        Assert.IsFalse(pump.Contains("Distinct", StringComparison.Ordinal));
+        Assert.IsFalse(pump.Contains("GroupBy", StringComparison.Ordinal));
+        Assert.IsFalse(code.Contains("PriorityQueue", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void ToastLifecycle_UsesAnimationSettingAndLiveRegionWithoutFocusChanges()
+    {
+        var code = ReadMainWindowCode();
+        StringAssert.Contains(code, "private Border CreateToastVisual");
+        StringAssert.Contains(code, "private void AnnounceToast");
+        StringAssert.Contains(code, "protected override void OnClosed");
+        var visual = MethodBody(
+            code,
+            "private Border CreateToastVisual",
+            "private void AnnounceToast");
+        var announce = MethodBody(
+            code,
+            "private void AnnounceToast",
+            "protected override void OnClosed");
+
+        StringAssert.Contains(code, "ToastRequested += OnToastRequested");
+        StringAssert.Contains(code, "ToastRequested -= OnToastRequested");
+        StringAssert.Contains(code, "SystemParameters.ClientAreaAnimation");
+        StringAssert.Contains(announce, "AutomationEvents.LiveRegionChanged");
+        StringAssert.Contains(code, "_pendingToasts.Clear()");
+        StringAssert.Contains(code, "_toastElements.Clear()");
+        StringAssert.Contains(code, "ToastHost.Children.Clear()");
+        StringAssert.Contains(visual, "IsHitTestVisible = false");
+        Assert.IsFalse(visual.Contains("Button", StringComparison.Ordinal));
+        Assert.IsFalse(announce.Contains("Focus(", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void MetadataWindow_ShowsAccessibleStructuredTvFieldsOnlyForEpisodes()
     {
         var markup = ReadMetadataWindowMarkup();
