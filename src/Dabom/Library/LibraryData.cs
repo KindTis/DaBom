@@ -83,7 +83,10 @@ public sealed record ScanWarning(string Path, string Reason)
 
 public sealed record ScanResult(
     IReadOnlyDictionary<string, ScannedVideo> Videos,
-    IReadOnlyList<ScanWarning> Warnings);
+    IReadOnlyList<ScanWarning> Warnings)
+{
+    public IReadOnlyList<string> UnavailablePaths { get; init; } = [];
+}
 
 public enum VideoSort
 {

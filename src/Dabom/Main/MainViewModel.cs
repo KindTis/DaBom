@@ -389,7 +389,7 @@ public sealed class MainViewModel : ViewModelBase
         try
         {
             var result = await _scanner.ScanAsync(
-                _data.Locations, _data.VideosByPath, CancellationToken.None);
+                _data.Locations, _data.VideosByPath, progress: null, CancellationToken.None);
             var nextRecords = new Dictionary<string, VideoRecord>(
                 _data.VideosByPath, StringComparer.OrdinalIgnoreCase);
             var cacheChanged = false;

@@ -226,6 +226,7 @@ public sealed class SearchResetTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken) =>
             Task.FromResult<ScanResult>(new(
                 new Dictionary<string, ScannedVideo>(),

@@ -2988,13 +2988,17 @@ public sealed class MainViewModelTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken)
         {
             Calls++;
-            var videos = paths.ToDictionary(
-                Path.GetFullPath,
-                path => new ScannedVideo(Path.GetFullPath(path), 1, DateTimeOffset.UnixEpoch, null),
-                StringComparer.OrdinalIgnoreCase);
+            var videos = new Dictionary<string, ScannedVideo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in paths)
+            {
+                var fullPath = Path.GetFullPath(path);
+                videos[fullPath] = new(fullPath, 1, DateTimeOffset.UnixEpoch, null);
+                progress?.Report(videos.Count);
+            }
             return Task.FromResult<ScanResult>(new(videos, []));
         }
     }
@@ -3007,13 +3011,17 @@ public sealed class MainViewModelTests
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<ScanResult> ScanAsync(
+        public async Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken)
         {
             Started.TrySetResult();
-            return _completion.Task.WaitAsync(cancellationToken);
+            var result = await _completion.Task.WaitAsync(cancellationToken);
+            var count = 0;
+            foreach (var _ in result.Videos) progress?.Report(++count);
+            return result;
         }
 
         public void Complete() => _completion.TrySetResult(Scan(paths));
@@ -3026,16 +3034,16 @@ public sealed class MainViewModelTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken)
         {
-            var videos = entries.ToDictionary(
-                entry => Path.GetFullPath(entry.Path),
-                entry => new ScannedVideo(
-                    Path.GetFullPath(entry.Path),
-                    1,
-                    entry.LastWriteTimeUtc,
-                    null),
-                StringComparer.OrdinalIgnoreCase);
+            var videos = new Dictionary<string, ScannedVideo>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
+            {
+                var path = Path.GetFullPath(entry.Path);
+                videos[path] = new(path, 1, entry.LastWriteTimeUtc, null);
+                progress?.Report(videos.Count);
+            }
             return Task.FromResult(new ScanResult(videos, []));
         }
     }
@@ -3047,8 +3055,13 @@ public sealed class MainViewModelTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(_results.Dequeue());
+            IProgress<int>? progress,
+            CancellationToken cancellationToken)
+        {
+            var result = _results.Dequeue();
+            for (var count = 1; count <= result.Videos.Count; count++) progress?.Report(count);
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class SuccessThenFailScanner : ILibraryScanner
@@ -3058,6 +3071,7 @@ public sealed class MainViewModelTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken) =>
             ++_calls == 1
                 ? Task.FromResult(new ScanResult(new Dictionary<string, ScannedVideo>(), []))

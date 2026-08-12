@@ -303,7 +303,8 @@ public sealed class CommandStateTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
-            CancellationToken cancellationToken) => Task.FromResult(Result(paths));
+            IProgress<int>? progress,
+            CancellationToken cancellationToken) => Task.FromResult(Result(paths, progress));
     }
 
     private sealed class ExpandingScanner(
@@ -316,11 +317,12 @@ public sealed class CommandStateTests
         public Task<ScanResult> ScanAsync(
             IReadOnlyList<string> locations,
             IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
             CancellationToken cancellationToken)
         {
             return Task.FromResult(++_calls == 1
-                ? Result([existingPath])
-                : Result([existingPath, newPath]));
+                ? Result([existingPath], progress)
+                : Result([existingPath, newPath], progress));
         }
     }
 
@@ -370,13 +372,15 @@ public sealed class CommandStateTests
         public void Complete() => _release.TrySetResult();
     }
 
-    private static ScanResult Result(IEnumerable<string> paths)
+    private static ScanResult Result(IEnumerable<string> paths, IProgress<int>? progress = null)
     {
-        var videos = paths.ToDictionary(
-            Path.GetFullPath,
-            path => new ScannedVideo(
-                Path.GetFullPath(path), 1, DateTimeOffset.UnixEpoch, null),
-            StringComparer.OrdinalIgnoreCase);
+        var videos = new Dictionary<string, ScannedVideo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            var fullPath = Path.GetFullPath(path);
+            videos[fullPath] = new(fullPath, 1, DateTimeOffset.UnixEpoch, null);
+            progress?.Report(videos.Count);
+        }
         return new(videos, []);
     }
 }

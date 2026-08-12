@@ -24,16 +24,19 @@ public sealed class LibraryScanner : ILibraryScanner
     public Task<ScanResult> ScanAsync(
         IReadOnlyList<string> locations,
         IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+        IProgress<int>? progress,
         CancellationToken cancellationToken) =>
-        Task.Run(() => Scan(locations, existingFileCache, cancellationToken), cancellationToken);
+        Task.Run(() => Scan(locations, existingFileCache, progress, cancellationToken), cancellationToken);
 
     private ScanResult Scan(
         IReadOnlyList<string> locations,
         IReadOnlyDictionary<string, VideoRecord> cache,
+        IProgress<int>? progress,
         CancellationToken cancellationToken)
     {
         var videos = new Dictionary<string, ScannedVideo>(StringComparer.OrdinalIgnoreCase);
         var warnings = new List<ScanWarning>();
+        var unavailablePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var rawLocation in locations)
@@ -80,9 +83,10 @@ public sealed class LibraryScanner : ILibraryScanner
                             continue;
                         }
 
+                        string? path = null;
                         try
                         {
-                            var path = Path.GetFullPath(file);
+                            path = Path.GetFullPath(file);
                             if (videos.ContainsKey(path))
                             {
                                 continue;
@@ -96,21 +100,24 @@ public sealed class LibraryScanner : ILibraryScanner
                                     ? old.DurationTicks
                                     : ReadDurationWithoutFailingScan(path);
                             videos[path] = new(path, info.Length, modified, duration);
+                            progress?.Report(videos.Count);
                         }
                         catch (Exception error) when (IsRecoverable(error))
                         {
                             warnings.Add(new(file, ShortReason(error)));
+                            if (path is not null) unavailablePaths.Add(path);
                         }
                     }
                 }
                 catch (Exception error) when (IsRecoverable(error))
                 {
                     warnings.Add(new(directory, ShortReason(error)));
+                    unavailablePaths.Add(directory);
                 }
             }
         }
 
-        return new(videos, warnings);
+        return new(videos, warnings) { UnavailablePaths = unavailablePaths.ToArray() };
     }
 
     private long? ReadDurationWithoutFailingScan(string path)

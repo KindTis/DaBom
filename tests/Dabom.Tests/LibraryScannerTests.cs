@@ -21,6 +21,7 @@ public sealed class LibraryScannerTests
             var result = await scanner.ScanAsync(
                 [root.FullName, nested.FullName, root.FullName.ToUpperInvariant()],
                 new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase),
+                null,
                 CancellationToken.None);
 
             Assert.AreEqual(1, result.Videos.Count);
@@ -54,12 +55,12 @@ public sealed class LibraryScannerTests
                 }
             };
 
-            var unchanged = await scanner.ScanAsync([root.FullName], cache, CancellationToken.None);
+            var unchanged = await scanner.ScanAsync([root.FullName], cache, null, CancellationToken.None);
             Assert.AreEqual(5000L, unchanged.Videos[Path.GetFullPath(video)].DurationTicks);
             Assert.AreEqual(0, reads);
 
             await File.AppendAllTextAsync(video, "changed");
-            var changed = await scanner.ScanAsync([root.FullName], cache, CancellationToken.None);
+            var changed = await scanner.ScanAsync([root.FullName], cache, null, CancellationToken.None);
             Assert.AreEqual(9000L, changed.Videos[Path.GetFullPath(video)].DurationTicks);
             Assert.AreEqual(1, reads);
         }
@@ -95,7 +96,7 @@ public sealed class LibraryScannerTests
             Assert.AreEqual(original.Length, changed.Length);
             Assert.AreNotEqual(original.LastWriteTimeUtc, changed.LastWriteTimeUtc);
 
-            var result = await scanner.ScanAsync([root.FullName], cache, CancellationToken.None);
+            var result = await scanner.ScanAsync([root.FullName], cache, null, CancellationToken.None);
 
             Assert.AreEqual(9000L, result.Videos[Path.GetFullPath(video)].DurationTicks);
             Assert.AreEqual(1, reads);
@@ -124,11 +125,13 @@ public sealed class LibraryScannerTests
             var result = await scanner.ScanAsync(
                 [denied, root.FullName],
                 new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase),
+                null,
                 CancellationToken.None);
 
             Assert.AreEqual(1, result.Videos.Count);
             Assert.AreEqual(denied, result.Warnings.Single().Path);
             Assert.AreEqual("접근 권한 없음", result.Warnings.Single().Reason);
+            CollectionAssert.AreEqual(new[] { denied }, result.UnavailablePaths.ToArray());
         }
         finally
         {
@@ -154,6 +157,7 @@ public sealed class LibraryScannerTests
             var result = await scanner.ScanAsync(
                 [root.FullName],
                 new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase),
+                null,
                 CancellationToken.None);
 
             Assert.AreEqual(2, result.Videos.Count);
@@ -164,5 +168,36 @@ public sealed class LibraryScannerTests
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_ReportsEachNewVideoCountInOrder()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-scan-progress-");
+        try
+        {
+            await File.WriteAllBytesAsync(Path.Combine(root.FullName, "A.mp4"), [1]);
+            await File.WriteAllBytesAsync(Path.Combine(root.FullName, "B.mkv"), [2]);
+            var counts = new List<int>();
+            var scanner = new LibraryScanner(_ => null);
+
+            var result = await scanner.ScanAsync(
+                [root.FullName],
+                new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase),
+                new InlineProgress<int>(counts.Add),
+                CancellationToken.None);
+
+            Assert.AreEqual(2, result.Videos.Count);
+            CollectionAssert.AreEqual(new[] { 1, 2 }, counts);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 }
