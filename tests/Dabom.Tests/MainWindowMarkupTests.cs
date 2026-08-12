@@ -287,9 +287,14 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(handler, "e.Key == Key.Delete");
         StringAssert.Contains(handler, "viewModel.RequestSeasonDeletionGuidance();");
         StringAssert.Contains(handler, "PrepareVideoDeletion()");
-        StringAssert.Contains(handler, "MessageBoxButton.OKCancel");
-        StringAssert.Contains(handler, "MessageBoxResult.Cancel");
+        StringAssert.Contains(handler, "new VideoDeletionConfirmationWindow(");
+        StringAssert.Contains(handler, "request.Video.FileName");
+        StringAssert.Contains(handler, "request.Status");
+        StringAssert.Contains(handler, "Owner = this");
+        StringAssert.Contains(handler, "ShowDialog() == true");
         StringAssert.Contains(handler, "await viewModel.DeleteVideoAsync(request)");
+        Assert.IsFalse(handler.Contains("MessageBox.Show", StringComparison.Ordinal));
+        Assert.IsFalse(handler.Contains("request.Video.Path", StringComparison.Ordinal));
         StringAssert.Contains(viewModel, "internal void RequestSeasonDeletionGuidance() =>");
         StringAssert.Contains(
             viewModel,

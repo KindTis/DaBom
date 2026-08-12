@@ -358,16 +358,13 @@ public partial class MainWindow : Window
 
             var request = viewModel.PrepareVideoDeletion();
             if (request is null) return;
-            var message = request.Status == VideoFileStatus.Present
-                ? $"“{request.Video.FileName}” ({request.Video.Path}) 파일을 휴지통으로 이동하시겠습니까? 파일과 영상 목록에서 제거됩니다."
-                : $"“{request.Video.FileName}” ({request.Video.Path}) 파일이 존재하지 않습니다. 영상 목록에서 제거하시겠습니까?";
-            if (MessageBox.Show(
-                    this,
-                    message,
-                    "영상 삭제",
-                    MessageBoxButton.OKCancel,
-                    MessageBoxImage.Warning,
-                    MessageBoxResult.Cancel) == MessageBoxResult.OK)
+            var confirmation = new VideoDeletionConfirmationWindow(
+                request.Video.FileName,
+                request.Status)
+            {
+                Owner = this
+            };
+            if (confirmation.ShowDialog() == true)
             {
                 await viewModel.DeleteVideoAsync(request);
             }
