@@ -1,9 +1,11 @@
+using Dabom.Library;
 using Dabom.Main;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Automation;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 
@@ -293,6 +295,67 @@ public sealed class MainWindowMarkupTests
             viewModel,
             "TV 시즌은 한 번에 삭제할 수 없습니다. 시즌을 열고 개별 영상을 선택하세요.");
         Assert.IsFalse(preview.Contains("Key.Delete", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void VideoDeletionConfirmationWindow_UsesDabomLayoutAndSafeDefaults()
+    {
+        var markup = ReadVideoDeletionConfirmationMarkup();
+        var code = ReadVideoDeletionConfirmationCode();
+
+        StringAssert.Contains(markup, "Title=\"영상 삭제\"");
+        StringAssert.Contains(markup, "Style=\"{StaticResource {x:Type Window}}\"");
+        StringAssert.Contains(markup, "WindowStartupLocation=\"CenterOwner\"");
+        StringAssert.Contains(markup, "ResizeMode=\"NoResize\"");
+        StringAssert.Contains(markup, "Text=\"영상을 삭제할까요?\"");
+        StringAssert.Contains(markup, "x:Name=\"FileNameText\"");
+        StringAssert.Contains(markup, "TextTrimming=\"CharacterEllipsis\"");
+        StringAssert.Contains(markup, "x:Name=\"CancelButton\"");
+        StringAssert.Contains(markup, "IsCancel=\"True\"");
+        StringAssert.Contains(markup, "IsDefault=\"True\"");
+        StringAssert.Contains(
+            markup,
+            "FocusManager.FocusedElement=\"{Binding ElementName=CancelButton}\"");
+        StringAssert.Contains(markup, "AutomationProperties.Name=\"영상 삭제 취소\"");
+        Assert.IsFalse(code.Contains(".Path", StringComparison.Ordinal));
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void VideoDeletionConfirmationWindow_UsesConciseStatusSpecificCopy()
+    {
+        EnsureApplicationResources();
+        var cases = new[]
+        {
+            (
+                VideoFileStatus.Present,
+                "파일을 휴지통으로 이동하고 목록에서도 제거합니다.",
+                "휴지통으로 이동"),
+            (
+                VideoFileStatus.Missing,
+                "파일을 찾을 수 없어 목록에서만 제거합니다.",
+                "목록에서 제거")
+        };
+
+        foreach (var (status, description, actionLabel) in cases)
+        {
+            var window = new VideoDeletionConfirmationWindow("Movie.mkv", status);
+            try
+            {
+                var fileName = (TextBlock)window.FindName("FileNameText");
+                var descriptionText = (TextBlock)window.FindName("DescriptionText");
+                var confirm = (Button)window.FindName("ConfirmButton");
+
+                Assert.AreEqual("Movie.mkv", fileName.Text);
+                Assert.AreEqual(description, descriptionText.Text);
+                Assert.AreEqual(actionLabel, confirm.Content);
+                Assert.AreEqual(actionLabel, AutomationProperties.GetName(confirm));
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
     }
 
     [TestMethod]
@@ -996,6 +1059,16 @@ public sealed class MainWindowMarkupTests
 
     private static string ReadAboutWindowMarkup() =>
         File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml"));
+
+    private static string ReadVideoDeletionConfirmationMarkup() =>
+        File.ReadAllText(Path.Combine(
+            ProjectDirectory(),
+            "VideoDeletionConfirmationWindow.xaml"));
+
+    private static string ReadVideoDeletionConfirmationCode() =>
+        File.ReadAllText(Path.Combine(
+            ProjectDirectory(),
+            "VideoDeletionConfirmationWindow.xaml.cs"));
 
     private static string ReadAboutWindowCode() =>
         File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml.cs"));
