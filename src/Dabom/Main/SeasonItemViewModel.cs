@@ -89,8 +89,11 @@ public sealed class SeasonItemViewModel : LibraryItemViewModel
     }
     public BitmapSource? Poster { get; }
     public bool HasPoster => Poster is not null;
-    public override string AutomationName =>
-        $"{DisplayTitle}, 시즌 {SeasonNumber}, {EpisodeCount}편, 시즌 열기";
+    public bool ContainsMissingFiles => _wholeGroup.Any(video => video.IsFileMissing);
+    public double PosterOpacity => ContainsMissingFiles ? 0.5 : 1.0;
+    public override string AutomationName => ContainsMissingFiles
+        ? $"{DisplayTitle}, 시즌 {SeasonNumber}, {EpisodeCount}편, 파일 없음 포함, 시즌 열기"
+        : $"{DisplayTitle}, 시즌 {SeasonNumber}, {EpisodeCount}편, 시즌 열기";
 
     private static VideoItemViewModel SelectIntroEpisode(
         IReadOnlyList<VideoItemViewModel> wholeGroup)

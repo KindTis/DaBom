@@ -120,6 +120,9 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand OpenMetadataCommand { get; }
     public ICommand RemoveLocationCommand { get; }
     public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
+    public event EventHandler<string>? ToastRequested;
+
+    private void RequestToast(string message) => ToastRequested?.Invoke(this, message);
 
     private LibraryItemViewModel? _selectedItem;
     private SeasonGroupKey? _activeSeasonKey;
@@ -379,17 +382,46 @@ public sealed class MainViewModel : ViewModelBase
                 StringComparison.Ordinal);
     }
 
+    private static bool IsSameOrWithin(string path, string parent) =>
+        string.Equals(path, parent, StringComparison.OrdinalIgnoreCase)
+        || IsWithinLocation(path, parent);
+
     public Task ScanAsync() => ScanAsync(false);
 
     private async Task ScanAsync(bool preserveFeatured)
     {
         if (IsScanning || IsRecordingPlayback) return;
         IsScanning = true;
-        HasCompletedLibraryScan = false;
         try
         {
-            var result = await _scanner.ScanAsync(
-                _data.Locations, _data.VideosByPath, progress: null, CancellationToken.None);
+            var activeStoredPaths = _data.VideosByPath.Keys
+                .Where(path => _data.Locations.Any(location => IsWithinLocation(path, location)))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var acceptScanProgress = true;
+            ScanResult result;
+            try
+            {
+                var progress = new Progress<int>(count =>
+                {
+                    if (acceptScanProgress)
+                    {
+                        StatusMessage = $"폴더 확인 중 · 영상 {count}개 확인";
+                    }
+                });
+                result = await _scanner.ScanAsync(
+                    _data.Locations,
+                    _data.VideosByPath,
+                    progress,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                acceptScanProgress = false;
+            }
+
+            var newPaths = result.Videos.Keys
+                .Where(path => !_data.VideosByPath.ContainsKey(path))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var nextRecords = new Dictionary<string, VideoRecord>(
                 _data.VideosByPath, StringComparer.OrdinalIgnoreCase);
             var cacheChanged = false;
@@ -416,14 +448,51 @@ public sealed class MainViewModel : ViewModelBase
             var nextData = _data with { VideosByPath = nextRecords };
             if (cacheChanged)
             {
-                await _store.SaveAsync(nextData);
+                try
+                {
+                    await _store.SaveAsync(nextData);
+                }
+                catch
+                {
+                    foreach (var path in newPaths)
+                    {
+                        RequestToast(
+                            $"“{Path.GetFileName(path)}”을 라이브러리에 저장하지 못했습니다.");
+                    }
+                    throw;
+                }
             }
 
             _data = nextData;
-            ApplyCurrentVideos(result.Videos.Keys, preserveFeatured);
+            var activePaths = activeStoredPaths
+                .Concat(newPaths)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var states = activePaths.ToDictionary(
+                path => path,
+                path => result.Videos.ContainsKey(path)
+                    ? VideoFileStatus.Present
+                    : result.UnavailablePaths.Any(unavailable =>
+                        IsSameOrWithin(path, unavailable))
+                        ? VideoFileStatus.Unavailable
+                        : VideoFileStatus.Missing,
+                StringComparer.OrdinalIgnoreCase);
+            ApplyCurrentVideos(activePaths, preserveFeatured, states);
             ReplaceWarnings(result.Warnings);
             LastScanUtc = _utcNow();
             HasCompletedLibraryScan = true;
+            foreach (var path in states
+                .Where(pair => pair.Value == VideoFileStatus.Missing)
+                .Select(pair => pair.Key))
+            {
+                RequestToast($"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다.");
+            }
+            foreach (var location in _data.Locations
+                .Where(location => result.UnavailablePaths.Any(path =>
+                    IsSameOrWithin(path, location)))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                RequestToast($"보관 위치에 연결할 수 없습니다: {location}");
+            }
             var summary = _metadataEnrichment is null
                 ? new MetadataRunSummary(0, 0, 0, false)
                 : await _metadataEnrichment.EnrichAsync(
@@ -702,21 +771,28 @@ public sealed class MainViewModel : ViewModelBase
 
     private void ApplyCurrentVideos(
         IEnumerable<string> currentPaths,
-        bool preserveFeatured = false)
+        bool preserveFeatured = false,
+        IReadOnlyDictionary<string, VideoFileStatus>? states = null)
     {
         var current = currentPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var existing = Videos.ToDictionary(video => video.Path, StringComparer.OrdinalIgnoreCase);
         foreach (var path in current)
         {
             var record = _data.VideosByPath[path];
-            if (existing.TryGetValue(path, out var item))
+            VideoItemViewModel item;
+            if (existing.TryGetValue(path, out var existingItem))
             {
+                item = existingItem;
                 item.Update(record);
             }
             else
             {
-                Videos.Add(new(path, record, _store));
+                item = new(path, record, _store);
+                Videos.Add(item);
             }
+            item.FileStatus = states is not null && states.TryGetValue(path, out var status)
+                ? status
+                : VideoFileStatus.Unknown;
         }
 
         foreach (var item in Videos.Where(video => !current.Contains(video.Path)).ToArray())

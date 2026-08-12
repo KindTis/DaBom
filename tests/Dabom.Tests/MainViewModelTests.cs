@@ -377,7 +377,7 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task SeasonView_WhenCurrentGroupDropsBelowTwo_ReturnsToOverview()
+    public async Task SeasonView_WhenEpisodeBecomesMissing_RemainsInSeason()
     {
         var root = Directory.CreateTempSubdirectory("dabom-season-collapse-");
         try
@@ -396,11 +396,14 @@ public sealed class MainViewModelTests
 
             await vm.ScanAsync();
 
-            Assert.IsFalse(vm.IsSeasonView);
-            Assert.IsNull(vm.SelectedItem);
-            Assert.AreEqual(1, vm.VisibleCount);
-            Assert.AreEqual(first, vm.VisibleItems.Cast<VideoItemViewModel>().Single().Path);
-            Assert.IsNull(vm.Videos.Single().Record.LastPlayedUtc);
+            Assert.IsTrue(vm.IsSeasonView);
+            Assert.AreEqual(2, vm.VisibleCount);
+            Assert.AreEqual(2, vm.DisplayItemCount);
+            Assert.AreEqual(
+                VideoFileStatus.Missing,
+                vm.Videos.Single(video => video.Path == second).FileStatus);
+            Assert.IsTrue(vm.ActiveSeason!.ContainsMissingFiles);
+            Assert.AreEqual(first, vm.SelectedVideo!.Path);
         }
         finally
         {
@@ -830,6 +833,42 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void SeasonItem_WhenEpisodeMissing_DimsPosterAndExtendsAutomationName()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-missing-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            var missing = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Missing.mkv"),
+                TvRecord("첫 화", "시리즈", 1, 1, "10"),
+                store)
+            {
+                FileStatus = VideoFileStatus.Missing
+            };
+            var present = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Present.mkv"),
+                TvRecord("두 번째 화", "시리즈", 1, 2, "10"),
+                store);
+
+            var season = new SeasonItemViewModel(
+                SeasonGroupKey.From(missing.Record)!,
+                [missing, present],
+                [missing, present]);
+
+            Assert.IsTrue(season.ContainsMissingFiles);
+            Assert.AreEqual(0.5, season.PosterOpacity);
+            Assert.AreEqual(
+                "시리즈, 시즌 1, 2편, 파일 없음 포함, 시즌 열기",
+                season.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task ScanAsync_DefaultsToTitleAscending()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
@@ -1014,6 +1053,147 @@ public sealed class MainViewModelTests
             Assert.AreEqual(
                 MetadataStatus.Pending,
                 vm.Videos.Single().Record.MetadataStatus);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_MissingAccessibleVideoStaysVisibleAndRequestsOneToast()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-missing-video-");
+        try
+        {
+            var location = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Movies")).FullName;
+            var path = Path.Combine(location, "Missing.mkv");
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(),
+                CachedData(location, path));
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.ScanAsync();
+
+            var video = vm.Videos.Single();
+            Assert.AreEqual(VideoFileStatus.Missing, video.FileStatus);
+            Assert.IsTrue(video.IsFileMissing);
+            Assert.AreEqual(0.5, video.PosterOpacity);
+            Assert.AreEqual("Missing, 영상, 파일 없음", video.AutomationName);
+            CollectionAssert.AreEqual(
+                new[] { $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다." },
+                toasts);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_UnavailablePathDoesNotBecomeMissing()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-unavailable-video-");
+        try
+        {
+            var location = Directory.CreateDirectory(
+                Path.Combine(root.FullName, "Movies")).FullName;
+            var unavailable = Path.Combine(location, "Offline");
+            var path = Path.Combine(unavailable, "Movie.mkv");
+            var result = Scan() with { UnavailablePaths = [unavailable] };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new SequenceScanner(result),
+                CachedData(location, path));
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(VideoFileStatus.Unavailable, vm.Videos.Single().FileStatus);
+            Assert.IsFalse(vm.Videos.Single().IsFileMissing);
+            CollectionAssert.AreEqual(
+                new[] { $"보관 위치에 연결할 수 없습니다: {location}" },
+                toasts);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_MissingVideoFoundAgainClearsStateWithoutAddedToast()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-restored-video-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new SequenceScanner(Scan(), Scan(path)),
+                CachedData(root.FullName, path));
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.ScanAsync();
+            Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(VideoFileStatus.Present, vm.Videos.Single().FileStatus);
+            CollectionAssert.AreEqual(
+                new[] { $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다." },
+                toasts);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_WhenInitialNewRecordSaveFailsDoesNotConfirmVideoAndRequestsOneToast()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-new-save-failure-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "New.mkv");
+            var data = new LibraryData { Locations = [root.FullName] };
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var store = new LibraryStore(
+                root.FullName,
+                (_, _, _) => Task.FromException(new IOException("disk full")));
+            var metadataStarted = false;
+            var provider = new TestProvider(
+                (_, _) =>
+                {
+                    metadataStarted = true;
+                    return Task.FromResult<IReadOnlyList<MetadataCandidate>>([]);
+                },
+                (_, _) => throw new InvalidOperationException());
+            using var imageClient = new HttpClient();
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(store, imageClient, provider),
+                data);
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.ScanAsync();
+
+            Assert.AreEqual(0, vm.Videos.Count);
+            var reloaded = await new LibraryStore(root.FullName)
+                .LoadAsync(CancellationToken.None);
+            Assert.IsFalse(reloaded.VideosByPath.ContainsKey(Path.GetFullPath(path)));
+            Assert.IsFalse(metadataStarted);
+            CollectionAssert.AreEqual(
+                new[] { $"“{Path.GetFileName(path)}”을 라이브러리에 저장하지 못했습니다." },
+                toasts);
         }
         finally
         {
@@ -1251,6 +1431,44 @@ public sealed class MainViewModelTests
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public void ScanAsync_ShowsFoundCountBeforeTheFinalSummary()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-scan-count-");
+            try
+            {
+                var first = Path.Combine(root.FullName, "First.mkv");
+                var second = Path.Combine(root.FullName, "Second.mkv");
+                var vm = CreateViewModel(
+                    new LibraryStore(root.FullName),
+                    new DeferredProgressScanner(first, second),
+                    CachedData(root.FullName, first, second));
+                var messages = new List<string>();
+                vm.PropertyChanged += (_, args) =>
+                {
+                    if (args.PropertyName == nameof(MainViewModel.StatusMessage))
+                    {
+                        messages.Add(vm.StatusMessage);
+                    }
+                };
+
+                await vm.ScanAsync();
+
+                CollectionAssert.Contains(
+                    messages,
+                    "폴더 확인 중 · 영상 1개 확인");
+                Assert.AreEqual("폴더 확인을 마쳤습니다.", vm.StatusMessage);
+                Assert.AreEqual("폴더 확인을 마쳤습니다.", messages.Last());
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
     }
 
     [TestMethod]
@@ -2527,6 +2745,33 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task InitializeAsync_UsesTheSameMissingFileAndToastRules()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-initialize-missing-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Missing.mkv");
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(),
+                CachedData(root.FullName, path));
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message);
+
+            await vm.InitializeAsync(null);
+
+            Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
+            CollectionAssert.AreEqual(
+                new[] { $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다." },
+                toasts);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task VideoItem_LoadsPosterAfterConstructionWhenRequested()
     {
         var root = Directory.CreateTempSubdirectory("dabom-deferred-poster-");
@@ -2695,24 +2940,34 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task ScanAsync_WhenRefreshFails_DoesNotKeepCompletedLibraryState()
+    public async Task ScanAsync_WhenRefreshFails_PreservesLastCompletedLibraryState()
     {
         var root = Directory.CreateTempSubdirectory("dabom-scan-state-");
         try
         {
             var location = Directory.CreateDirectory(
                 Path.Combine(root.FullName, "Movies")).FullName;
+            var path = Path.Combine(location, "Movie.mkv");
+            var warning = new ScanWarning(location, "첫 경고");
             var vm = CreateViewModel(
                 new LibraryStore(root.FullName),
-                new SuccessThenFailScanner(),
-                new LibraryData { Locations = [location] });
+                new SuccessThenFailScanner(new(Scan(path).Videos, [warning])),
+                CachedData(location, path));
             await vm.InitializeAsync(null);
             Assert.IsTrue(vm.HasCompletedLibraryScan);
+            var video = vm.Videos.Single();
+            var warnings = vm.Warnings.ToArray();
+            var lastScanUtc = vm.LastScanUtc;
 
             await vm.ScanAsync();
 
             Assert.IsFalse(vm.IsLibraryLoading);
-            Assert.IsFalse(vm.HasCompletedLibraryScan);
+            Assert.IsTrue(vm.HasCompletedLibraryScan);
+            Assert.AreSame(video, vm.Videos.Single());
+            Assert.AreEqual(VideoFileStatus.Present, video.FileStatus);
+            CollectionAssert.AreEqual(warnings, vm.Warnings.ToArray());
+            Assert.AreEqual(lastScanUtc, vm.LastScanUtc);
+            StringAssert.Contains(vm.StatusMessage, "scan failed");
         }
         finally
         {
@@ -2829,13 +3084,15 @@ public sealed class MainViewModelTests
             await vm.ScanAsync();
 
             Assert.AreEqual("드라마", vm.SelectedFilter!.Genre);
-            Assert.AreEqual(0, vm.Videos.Count);
+            Assert.AreEqual(1, vm.Videos.Count);
+            Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
             Assert.IsFalse(vm.IsFilterEmptyStateVisible);
 
             await vm.ScanAsync();
 
             Assert.AreEqual("드라마", vm.SelectedFilter!.Genre);
             Assert.AreEqual(1, vm.VisibleCount);
+            Assert.AreEqual(VideoFileStatus.Present, vm.Videos.Single().FileStatus);
         }
         finally
         {
@@ -3064,7 +3321,22 @@ public sealed class MainViewModelTests
         }
     }
 
-    private sealed class SuccessThenFailScanner : ILibraryScanner
+    private sealed class DeferredProgressScanner(params string[] paths) : ILibraryScanner
+    {
+        public async Task<ScanResult> ScanAsync(
+            IReadOnlyList<string> locations,
+            IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
+            CancellationToken cancellationToken)
+        {
+            progress?.Report(1);
+            await Task.Yield();
+            progress?.Report(2);
+            return Scan(paths);
+        }
+    }
+
+    private sealed class SuccessThenFailScanner(ScanResult success) : ILibraryScanner
     {
         private int _calls;
 
@@ -3074,7 +3346,7 @@ public sealed class MainViewModelTests
             IProgress<int>? progress,
             CancellationToken cancellationToken) =>
             ++_calls == 1
-                ? Task.FromResult(new ScanResult(new Dictionary<string, ScannedVideo>(), []))
+                ? Task.FromResult(success)
                 : Task.FromException<ScanResult>(new IOException("scan failed"));
     }
 

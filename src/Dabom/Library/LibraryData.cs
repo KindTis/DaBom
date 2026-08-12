@@ -17,6 +17,14 @@ public enum MetadataStatus
     Manual
 }
 
+public enum VideoFileStatus
+{
+    Unknown,
+    Present,
+    Missing,
+    Unavailable
+}
+
 public enum MetadataField
 {
     Title,

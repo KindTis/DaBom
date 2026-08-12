@@ -7,6 +7,7 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
 {
     private readonly LibraryStore _store;
     private VideoRecord _record;
+    private VideoFileStatus _fileStatus;
     private BitmapSource? _poster;
     private string? _posterLoadReference;
     private Task? _posterLoad;
@@ -19,7 +20,22 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
     }
 
     public string Path { get; }
-    public override string AutomationName => $"{DisplayTitle}, 영상";
+    public VideoFileStatus FileStatus
+    {
+        get => _fileStatus;
+        internal set
+        {
+            if (!Set(ref _fileStatus, value)) return;
+            Raise(nameof(IsFileMissing));
+            Raise(nameof(PosterOpacity));
+            Raise(nameof(AutomationName));
+        }
+    }
+    public bool IsFileMissing => FileStatus == VideoFileStatus.Missing;
+    public double PosterOpacity => IsFileMissing ? 0.5 : 1.0;
+    public override string AutomationName => IsFileMissing
+        ? $"{DisplayTitle}, 영상, 파일 없음"
+        : $"{DisplayTitle}, 영상";
     public string FileName => System.IO.Path.GetFileName(Path);
     public VideoRecord Record => _record;
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);
