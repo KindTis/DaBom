@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 
@@ -355,6 +356,39 @@ public sealed class MainWindowMarkupTests
                 Assert.AreEqual(description, descriptionText.Text);
                 Assert.AreEqual(actionLabel, confirm.Content);
                 Assert.AreEqual(actionLabel, AutomationProperties.GetName(confirm));
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void VideoDeletionConfirmationWindow_ExposesDynamicFileAndStatusTextThroughAutomationPeers()
+    {
+        EnsureApplicationResources();
+        var cases = new[]
+        {
+            (
+                VideoFileStatus.Present,
+                "파일을 휴지통으로 이동하고 목록에서도 제거합니다."),
+            (
+                VideoFileStatus.Missing,
+                "파일을 찾을 수 없어 목록에서만 제거합니다.")
+        };
+
+        foreach (var (status, description) in cases)
+        {
+            var window = new VideoDeletionConfirmationWindow("Movie.mkv", status);
+            try
+            {
+                var fileName = (TextBlock)window.FindName("FileNameText");
+                var descriptionText = (TextBlock)window.FindName("DescriptionText");
+
+                Assert.AreEqual("Movie.mkv", new TextBlockAutomationPeer(fileName).GetName());
+                Assert.AreEqual(description, new TextBlockAutomationPeer(descriptionText).GetName());
             }
             finally
             {

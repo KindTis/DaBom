@@ -30,16 +30,14 @@
                 Background="{StaticResource RaisedBrush}"
                 CornerRadius="{StaticResource ControlCornerRadius}">
             <TextBlock x:Name="FileNameText"
-                       TextTrimming="CharacterEllipsis"
-                       AutomationProperties.Name="삭제할 영상 파일명" />
+                       TextTrimming="CharacterEllipsis" />
         </Border>
 
         <TextBlock x:Name="DescriptionText"
                    Grid.Row="2"
                    Margin="0,16,0,0"
                    Foreground="{StaticResource MutedBrush}"
-                   TextWrapping="Wrap"
-                   AutomationProperties.Name="삭제 결과 안내" />
+                   TextWrapping="Wrap" />
 
         <StackPanel Grid.Row="3"
                     Margin="0,28,0,0"
