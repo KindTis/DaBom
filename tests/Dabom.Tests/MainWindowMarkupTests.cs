@@ -988,12 +988,21 @@ public sealed class MainWindowMarkupTests
             Assert.AreEqual(60, poster.Height);
             Assert.AreSame(window.FindResource("SurfaceBrush"), poster.Background);
             Assert.IsInstanceOfType<Border>(poster.Child);
-            var lines = content.Children.OfType<StackPanel>().Single()
-                .Children.OfType<TextBlock>().ToArray();
-            Assert.AreEqual("Movie", lines[0].Text);
-            Assert.AreEqual("추가됨 · Movie.File.mkv", lines[1].Text);
-            Assert.AreEqual(TextTrimming.CharacterEllipsis, lines[0].TextTrimming);
-            Assert.AreEqual(TextTrimming.CharacterEllipsis, lines[1].TextTrimming);
+            var lines = content.Children.OfType<StackPanel>().Single();
+            var title = (TextBlock)lines.Children[0];
+            var details = (Grid)lines.Children[1];
+            Assert.AreEqual(0, details.Children.OfType<Border>().Count());
+            var detailTexts = details.Children.OfType<TextBlock>().ToArray();
+            var result = detailTexts.Single(text => text.Text == "추가됨");
+            var separator = detailTexts.Single(text => text.Text == "·");
+            var fileName = detailTexts.Single(text => text.Text == "Movie.File.mkv");
+            Assert.AreEqual("Movie", title.Text);
+            Assert.AreSame(window.FindResource("ToastSuccessBrush"), result.Foreground);
+            Assert.AreEqual(FontWeights.SemiBold, result.FontWeight);
+            Assert.AreSame(window.FindResource("MutedBrush"), separator.Foreground);
+            Assert.AreSame(window.FindResource("MutedBrush"), fileName.Foreground);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, title.TextTrimming);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, fileName.TextTrimming);
 
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
@@ -1005,6 +1014,15 @@ public sealed class MainWindowMarkupTests
             window.Close();
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public void ToastStatusBrushKey_DistinguishesSuccessWarningAndErrors()
+    {
+        Assert.AreEqual("ToastSuccessBrush", MainWindow.GetToastStatusBrushKey("추가됨"));
+        Assert.AreEqual("ToastWarningBrush", MainWindow.GetToastStatusBrushKey("파일 상태 변경"));
+        Assert.AreEqual("ToastErrorBrush", MainWindow.GetToastStatusBrushKey("파일 없음"));
+        Assert.AreEqual("ToastErrorBrush", MainWindow.GetToastStatusBrushKey("저장 실패"));
     }
 
     [TestMethod]

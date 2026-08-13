@@ -47,6 +47,13 @@ public partial class MainWindow : Window
     internal static double DoubleClickWidth => GetSystemMetrics(DoubleClickWidthMetric);
     private static double DoubleClickHeight => GetSystemMetrics(DoubleClickHeightMetric);
 
+    internal static string GetToastStatusBrushKey(string result) => result switch
+    {
+        "추가됨" => "ToastSuccessBrush",
+        "파일 상태 변경" => "ToastWarningBrush",
+        _ => "ToastErrorBrush"
+    };
+
     public MainWindow()
     {
         InitializeComponent();
@@ -237,13 +244,39 @@ public partial class MainWindow : Window
             Foreground = (Brush)FindResource("TextBrush"),
             TextTrimming = TextTrimming.CharacterEllipsis
         };
-        var details = new TextBlock
+        var result = new TextBlock
         {
-            Text = $"{request.Result} · {video.FileName}",
-            Margin = new Thickness(0, 7, 0, 0),
+            Text = request.Result,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)FindResource(GetToastStatusBrushKey(request.Result)),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var separator = new TextBlock
+        {
+            Text = "·",
+            Margin = new Thickness(6, 0, 6, 0),
+            Foreground = (Brush)FindResource("MutedBrush"),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var fileName = new TextBlock
+        {
+            Text = video.FileName,
+            VerticalAlignment = VerticalAlignment.Center,
             Foreground = (Brush)FindResource("MutedBrush"),
             TextTrimming = TextTrimming.CharacterEllipsis
         };
+        var details = new Grid
+        {
+            Margin = new Thickness(0, 7, 0, 0)
+        };
+        details.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        details.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        details.ColumnDefinitions.Add(new ColumnDefinition());
+        details.Children.Add(result);
+        Grid.SetColumn(separator, 1);
+        details.Children.Add(separator);
+        Grid.SetColumn(fileName, 2);
+        details.Children.Add(fileName);
         var lines = new StackPanel
         {
             Width = 268,
