@@ -37,6 +37,11 @@ internal sealed record VideoDeletionRequest(
     VideoFileStatus Status,
     FileIdentity? Identity);
 
+public sealed record ToastRequest(
+    string Message,
+    string? Result,
+    VideoItemViewModel? Video);
+
 public sealed class MainViewModel : ViewModelBase
 {
     private readonly LibraryStore _store;
@@ -131,9 +136,13 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand OpenMetadataCommand { get; }
     public ICommand RemoveLocationCommand { get; }
     public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
-    public event EventHandler<string>? ToastRequested;
+    public event EventHandler<ToastRequest>? ToastRequested;
 
-    private void RequestToast(string message) => ToastRequested?.Invoke(this, message);
+    private void RequestToast(string message) =>
+        ToastRequested?.Invoke(this, new(message, null, null));
+
+    private void RequestToast(string message, string result, VideoItemViewModel video) =>
+        ToastRequested?.Invoke(this, new(message, result, video));
 
     private LibraryItemViewModel? _selectedItem;
     private SeasonGroupKey? _activeSeasonKey;
@@ -300,6 +309,30 @@ public sealed class MainViewModel : ViewModelBase
     internal SeasonItemViewModel? FindSeason(SeasonGroupKey key) =>
         VisibleItems.OfType<SeasonItemViewModel>()
             .SingleOrDefault(season => season.Key == key);
+
+    internal bool RevealVideo(VideoItemViewModel video)
+    {
+        if (!Videos.Contains(video)) return false;
+
+        SearchText = string.Empty;
+        SelectedFilter = FilterOptions.Single(option => option.Kind == LibraryFilterKind.All);
+        var key = SeasonGroupKey.From(video.Record);
+        var nextSeasonKey = key is not null && CurrentSeasonGroups().ContainsKey(key)
+            ? key
+            : null;
+        var seasonChanged = _activeSeasonKey != nextSeasonKey;
+        _activeSeasonKey = nextSeasonKey;
+        if (nextSeasonKey is not null)
+        {
+            _seasonDisplayTitle = video.Record.SeriesTitle!.Trim();
+        }
+        RefreshLibraryView(false);
+        if (seasonChanged) RaiseSeasonContext();
+        if (!VisibleItems.Contains(video)) return false;
+
+        SelectedVideo = video;
+        return true;
+    }
 
     private string _statusMessage = string.Empty;
     public string StatusMessage
@@ -517,7 +550,12 @@ public sealed class MainViewModel : ViewModelBase
                 .Where(pair => pair.Value == VideoFileStatus.Missing)
                 .Select(pair => pair.Key))
             {
-                RequestToast($"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다.");
+                RequestToast(
+                    $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다.",
+                    "파일 없음",
+                    Videos.Single(video => video.Path.Equals(
+                        path,
+                        StringComparison.OrdinalIgnoreCase)));
             }
             foreach (var location in _data.Locations
                 .Where(location => result.UnavailablePaths.Any(path =>
@@ -644,7 +682,10 @@ public sealed class MainViewModel : ViewModelBase
         if (current.Status is not (VideoFileStatus.Present or VideoFileStatus.Missing)
             || current.Status == VideoFileStatus.Present && current.Identity is null)
         {
-            RequestToast("파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
+            RequestToast(
+                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
+                "파일 상태 변경",
+                video);
             return null;
         }
 
@@ -661,7 +702,10 @@ public sealed class MainViewModel : ViewModelBase
             var current = _probeFile(request.Video.Path);
             if (!SameDeletionTarget(request, current))
             {
-                RequestToast("파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
+                RequestToast(
+                    "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
+                    "파일 상태 변경",
+                    request.Video);
                 return false;
             }
 
@@ -677,7 +721,9 @@ public sealed class MainViewModel : ViewModelBase
                 catch
                 {
                     RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}”을 휴지통으로 이동하지 못했습니다.");
+                        $"“{Path.GetFileName(request.Video.Path)}”을 휴지통으로 이동하지 못했습니다.",
+                        "휴지통 이동 실패",
+                        request.Video);
                     return false;
                 }
             }
@@ -692,12 +738,16 @@ public sealed class MainViewModel : ViewModelBase
                 {
                     request.Video.FileStatus = VideoFileStatus.Missing;
                     RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.");
+                        $"“{Path.GetFileName(request.Video.Path)}” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.",
+                        "목록 제거 실패 · 파일 이동됨",
+                        request.Video);
                 }
                 else
                 {
                     RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}”을 영상 목록에서 제거하지 못했습니다.");
+                        $"“{Path.GetFileName(request.Video.Path)}”을 영상 목록에서 제거하지 못했습니다.",
+                        "목록 제거 실패",
+                        request.Video);
                 }
                 return false;
             }
@@ -883,25 +933,32 @@ public sealed class MainViewModel : ViewModelBase
             + $"성공 {progress.Matched} · 결과 없음 {progress.NotFound} · "
             + $"실패 {progress.Failed} · {Path.GetFileName(progress.Path)}";
         if (!newPaths.Contains(progress.Path)) return;
+        var video = Videos.Single(item => item.Path.Equals(
+            progress.Path,
+            StringComparison.OrdinalIgnoreCase));
 
         if (!progress.CommitSucceeded)
         {
             RequestToast(
-                $"“{Path.GetFileName(progress.Path)}”을 라이브러리에 저장하지 못했습니다.");
+                $"“{Path.GetFileName(progress.Path)}”을 라이브러리에 저장하지 못했습니다.",
+                "저장 실패",
+                video);
             return;
         }
 
         if (progress.Status == MetadataStatus.Matched)
         {
-            var video = Videos.Single(item => item.Path.Equals(
-                progress.Path,
-                StringComparison.OrdinalIgnoreCase));
-            RequestToast($"“{video.DisplayTitle}”이 추가되었습니다.");
+            RequestToast(
+                $"“{video.DisplayTitle}”이 추가되었습니다.",
+                "추가됨",
+                video);
             return;
         }
 
         RequestToast(
-            $"“{Path.GetFileName(progress.Path)}”의 메타데이터 수집에 실패했습니다.");
+            $"“{Path.GetFileName(progress.Path)}”의 메타데이터 수집에 실패했습니다.",
+            "메타데이터 수집 실패",
+            video);
     }
 
     private void ApplyCurrentVideos(

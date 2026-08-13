@@ -7,6 +7,7 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -40,7 +41,7 @@ public partial class MainWindow : Window
     private long _nextToastId;
     private bool _toastPumpRunning;
 
-    private sealed record ToastEntry(long Id, string Message);
+    private sealed record ToastEntry(long Id, ToastRequest Request);
 
     internal static int DoubleClickTime => unchecked((int)GetDoubleClickTime());
     internal static double DoubleClickWidth => GetSystemMetrics(DoubleClickWidthMetric);
@@ -70,16 +71,16 @@ public partial class MainWindow : Window
         _seasonReturnKey = null;
     }
 
-    private void OnToastRequested(object? sender, string message)
+    private void OnToastRequested(object? sender, ToastRequest request)
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(() => OnToastRequested(sender, message));
+            Dispatcher.BeginInvoke(() => OnToastRequested(sender, request));
             return;
         }
         if (_toastCancellation.IsCancellationRequested) return;
 
-        _pendingToasts.Enqueue(new ToastEntry(++_nextToastId, message));
+        _pendingToasts.Enqueue(new ToastEntry(++_nextToastId, request));
         _ = PumpToastsAsync();
     }
 
@@ -111,11 +112,11 @@ public partial class MainWindow : Window
         try
         {
             var existingElements = _toastElements.Values.ToArray();
-            var element = CreateToastVisual(entry.Message);
+            var element = CreateToastVisual(entry);
             _toastElements.Add(entry, element);
             ToastHost.Children.Add(element);
             ToastHost.UpdateLayout();
-            AnnounceToast(entry.Message);
+            AnnounceToast(entry.Request.Message);
             _ = ExpireToastAsync(entry, token);
 
             if (!SystemParameters.ClientAreaAnimation)
@@ -186,24 +187,127 @@ public partial class MainWindow : Window
         await PumpToastsAsync();
     }
 
-    private Border CreateToastVisual(string message) => new()
+    private FrameworkElement CreateToastVisual(ToastEntry entry)
     {
-        MaxWidth = 360,
-        Margin = new Thickness(0, 0, 0, 8),
-        Padding = new Thickness(18, 14, 18, 14),
-        Background = (Brush)FindResource("SurfaceBrush"),
-        BorderBrush = (Brush)FindResource("LineBrush"),
-        BorderThickness = new Thickness(1),
-        CornerRadius = (CornerRadius)FindResource("ControlCornerRadius"),
-        IsHitTestVisible = false,
-        RenderTransform = new TranslateTransform(),
-        Child = new TextBlock
+        var request = entry.Request;
+        if (request.Video is null || request.Result is null)
         {
-            Text = message,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)FindResource("TextBrush")
+            return new Border
+            {
+                Width = 360,
+                Margin = new Thickness(0, 0, 0, 8),
+                Padding = new Thickness(18, 14, 18, 14),
+                Background = (Brush)FindResource("RaisedBrush"),
+                BorderBrush = (Brush)FindResource("AccentBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = (CornerRadius)FindResource("ControlCornerRadius"),
+                IsHitTestVisible = false,
+                RenderTransform = new TranslateTransform(),
+                Child = new TextBlock
+                {
+                    Text = request.Message,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = (Brush)FindResource("TextBrush")
+                }
+            };
         }
-    };
+
+        var video = request.Video;
+        var posterBrush = new ImageBrush { Stretch = Stretch.UniformToFill };
+        BindingOperations.SetBinding(
+            posterBrush,
+            ImageBrush.ImageSourceProperty,
+            new Binding(nameof(VideoItemViewModel.Poster)));
+        var poster = new Border
+        {
+            Width = 40,
+            Height = 60,
+            CornerRadius = new CornerRadius(6),
+            Background = (Brush)FindResource("SurfaceBrush"),
+            Child = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Background = posterBrush
+            }
+        };
+        var title = new TextBlock
+        {
+            Text = video.DisplayTitle,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)FindResource("TextBrush"),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        var details = new TextBlock
+        {
+            Text = $"{request.Result} · {video.FileName}",
+            Margin = new Thickness(0, 7, 0, 0),
+            Foreground = (Brush)FindResource("MutedBrush"),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        var lines = new StackPanel
+        {
+            Width = 268,
+            Margin = new Thickness(14, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        lines.Children.Add(title);
+        lines.Children.Add(details);
+        var content = new Grid
+        {
+            Width = 322,
+            DataContext = video
+        };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.ColumnDefinitions.Add(new ColumnDefinition());
+        content.Children.Add(poster);
+        Grid.SetColumn(lines, 1);
+        content.Children.Add(lines);
+        var button = new Button
+        {
+            Width = 360,
+            Margin = new Thickness(0, 0, 0, 8),
+            Padding = new Thickness(18, 12, 18, 12),
+            Background = (Brush)FindResource("RaisedBrush"),
+            BorderBrush = (Brush)FindResource("AccentBrush"),
+            BorderThickness = new Thickness(1),
+            RenderTransform = new TranslateTransform(),
+            Content = content
+        };
+        AutomationProperties.SetName(button, $"{request.Message} 목록에서 보기");
+        button.Click += (_, _) => OnToastClick(entry);
+        return button;
+    }
+
+    private void OnToastClick(ToastEntry entry)
+    {
+        if (entry.Request.Video is not { } video
+            || DataContext is not MainViewModel viewModel
+            || !viewModel.RevealVideo(video))
+        {
+            return;
+        }
+
+        DismissToast(entry);
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            VideoList.UpdateLayout();
+            if (VideoList.ItemContainerGenerator.ContainerFromItem(video)
+                is not ListBoxItem container)
+            {
+                return;
+            }
+            container.BringIntoView();
+            container.Focus();
+        });
+    }
+
+    private void DismissToast(ToastEntry entry)
+    {
+        if (!_toastElements.Remove(entry, out var element)) return;
+
+        ToastHost.Children.Remove(element);
+        _ = PumpToastsAsync();
+    }
 
     private void AnnounceToast(string message)
     {

@@ -754,7 +754,9 @@
                                             </TextBlock.Style>
                                         </TextBlock>
                                         <Border VerticalAlignment="Bottom"
+                                                Margin="1,0,1,1"
                                                 Padding="0,7"
+                                                CornerRadius="0,0,15,15"
                                                 Background="#FFD63C3C"
                                                 Visibility="{Binding IsFileMissing,
                                                     Converter={StaticResource BoolToVisibility}}">
@@ -832,7 +834,9 @@
                                                        FontSize="12" FontWeight="Bold" />
                                         </Border>
                                         <Border VerticalAlignment="Bottom"
+                                                Margin="1,0,1,1"
                                                 Padding="0,7"
+                                                CornerRadius="0,0,15,15"
                                                 Background="#FFD63C3C"
                                                 Visibility="{Binding ContainsMissingFiles,
                                                     Converter={StaticResource BoolToVisibility}}">
@@ -919,7 +923,7 @@
                     Margin="0,0,32,110"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"
-                    IsHitTestVisible="False" />
+                    IsHitTestVisible="True" />
         <TextBlock x:Name="ToastAnnouncement"
                    Width="1"
                    Height="1"

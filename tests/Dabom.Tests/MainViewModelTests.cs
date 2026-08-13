@@ -45,6 +45,55 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task RevealVideo_ClearsConditionsOpensSeasonAndSelectsTarget()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-reveal-video-");
+        try
+        {
+            var first = Path.Combine(root.FullName, "Episode.One.mkv");
+            var second = Path.Combine(root.FullName, "Episode.Two.mkv");
+            var movie = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, first, second, movie);
+            data.VideosByPath[first] = TvRecord("Episode One", "Series", 1, 1) with
+            {
+                Genres = ["Drama"]
+            };
+            data.VideosByPath[second] = TvRecord("Episode Two", "Series", 1, 2) with
+            {
+                Genres = ["Drama"]
+            };
+            data.VideosByPath[movie] = data.VideosByPath[movie] with
+            {
+                Title = "Movie",
+                MediaType = MediaType.Movie,
+                Genres = ["Action"]
+            };
+            var vm = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new StubScanner(first, second, movie),
+                data);
+            await vm.ScanAsync();
+            var target = vm.Videos.Single(video => video.Path == first);
+            vm.SearchText = "Movie";
+            vm.SelectedFilter = Filter(vm, LibraryFilterKind.Genre, "Action");
+            Assert.IsFalse(vm.VisibleItems.Contains(target));
+
+            var revealed = vm.RevealVideo(target);
+
+            Assert.IsTrue(revealed);
+            Assert.AreEqual(string.Empty, vm.SearchText);
+            Assert.AreEqual(LibraryFilterKind.All, vm.SelectedFilter!.Kind);
+            Assert.IsTrue(vm.IsSeasonView);
+            Assert.IsTrue(vm.VisibleItems.Contains(target));
+            Assert.AreSame(target, vm.SelectedVideo);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public async Task Overview_GroupsBeforeSearchAndKeepsActualVideoCounts()
     {
         var root = Directory.CreateTempSubdirectory("dabom-season-overview-");
@@ -1085,8 +1134,8 @@ public sealed class MainViewModelTests
                 new LibraryStore(root.FullName),
                 new StubScanner(),
                 CachedData(location, path));
-            var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            var toasts = new List<ToastRequest>();
+            vm.ToastRequested += (_, toast) => toasts.Add(toast);
 
             await vm.ScanAsync();
 
@@ -1095,9 +1144,12 @@ public sealed class MainViewModelTests
             Assert.IsTrue(video.IsFileMissing);
             Assert.AreEqual(0.5, video.PosterOpacity);
             Assert.AreEqual("Missing, 영상, 파일 없음", video.AutomationName);
-            CollectionAssert.AreEqual(
-                new[] { $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다." },
-                toasts);
+            var toast = toasts.Single();
+            Assert.AreEqual(
+                $"“{Path.GetFileName(path)}” 파일이 존재하지 않습니다.",
+                toast.Message);
+            Assert.AreEqual("파일 없음", toast.Result);
+            Assert.AreSame(video, toast.Video);
         }
         finally
         {
@@ -1121,7 +1173,7 @@ public sealed class MainViewModelTests
                 new SequenceScanner(result),
                 CachedData(location, path));
             var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
             await vm.ScanAsync();
 
@@ -1149,7 +1201,7 @@ public sealed class MainViewModelTests
                 new SequenceScanner(Scan(), Scan(path)),
                 CachedData(root.FullName, path));
             var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
             await vm.ScanAsync();
             Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
@@ -1194,7 +1246,7 @@ public sealed class MainViewModelTests
                 CreateEnrichment(store, imageClient, provider),
                 data);
             var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
             await vm.ScanAsync();
 
@@ -1241,7 +1293,7 @@ public sealed class MainViewModelTests
                     CreateEnrichment(store, imageClient, provider),
                     new LibraryData { Locations = [root.FullName] });
                 var toasts = new List<string>();
-                vm.ToastRequested += (_, message) => toasts.Add(message);
+                vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
                 await vm.ScanAsync();
 
@@ -1276,7 +1328,7 @@ public sealed class MainViewModelTests
                     CreateEnrichment(store, imageClient, provider),
                     new LibraryData { Locations = [root.FullName] });
                 var toasts = new List<string>();
-                vm.ToastRequested += (_, message) => toasts.Add(message);
+                vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
                 await vm.ScanAsync();
 
@@ -1331,7 +1383,7 @@ public sealed class MainViewModelTests
                     CreateEnrichment(store, imageClient, provider),
                     new LibraryData { Locations = [root.FullName] });
                 var toasts = new List<string>();
-                vm.ToastRequested += (_, message) => toasts.Add(message);
+                vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
                 await vm.ScanAsync();
 
@@ -1378,7 +1430,7 @@ public sealed class MainViewModelTests
                 CreateEnrichment(store, imageClient, provider),
                 data);
             var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
             await vm.ScanAsync();
 
@@ -2955,7 +3007,7 @@ public sealed class MainViewModelTests
                 new StubScanner(),
                 CachedData(root.FullName, path));
             var toasts = new List<string>();
-            vm.ToastRequested += (_, message) => toasts.Add(message);
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
 
             await vm.InitializeAsync(null);
 
@@ -3538,7 +3590,7 @@ public sealed class MainViewModelTests
                 probe,
                 _ => calls.Add("recycle"));
             string? toast = null;
-            vm.ToastRequested += (_, message) => toast = message;
+            vm.ToastRequested += (_, message) => toast = message.Message;
 
             var request = vm.PrepareVideoDeletion();
             var deleted = await vm.DeleteVideoAsync(request!);
@@ -3575,7 +3627,7 @@ public sealed class MainViewModelTests
                 ProbeSequence(calls, new FileProbeResult(status, null)),
                 _ => Assert.Fail());
             string? toast = null;
-            vm.ToastRequested += (_, message) => toast = message;
+            vm.ToastRequested += (_, message) => toast = message.Message;
 
             var request = vm.PrepareVideoDeletion();
 
@@ -3621,7 +3673,7 @@ public sealed class MainViewModelTests
                     throw new IOException("recycle failed");
                 });
             string? toast = null;
-            vm.ToastRequested += (_, message) => toast = message;
+            vm.ToastRequested += (_, message) => toast = message.Message;
 
             var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
 
@@ -3664,7 +3716,7 @@ public sealed class MainViewModelTests
                     new FileProbeResult(VideoFileStatus.Present, identity)),
                 _ => calls.Add("recycle"));
             string? toast = null;
-            vm.ToastRequested += (_, message) => toast = message;
+            vm.ToastRequested += (_, message) => toast = message.Message;
 
             var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
 
@@ -3711,7 +3763,7 @@ public sealed class MainViewModelTests
                     new FileProbeResult(VideoFileStatus.Missing, null)),
                 _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
             string? toast = null;
-            vm.ToastRequested += (_, message) => toast = message;
+            vm.ToastRequested += (_, message) => toast = message.Message;
 
             var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
 
