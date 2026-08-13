@@ -168,6 +168,7 @@ public sealed class MainViewModelTests
                 titleSeason.Episodes.Select(video => video.DisplayTitle).ToArray());
             Assert.AreEqual(2, vm.VisibleItems.OfType<VideoItemViewModel>().Count());
 
+            vm.IsSortDescending = true;
             vm.SelectedSort = VideoSort.ReleaseDate;
 
             var releaseSeason = vm.VisibleItems.OfType<SeasonItemViewModel>().Single();
@@ -219,6 +220,7 @@ public sealed class MainViewModelTests
                 data);
             await vm.ScanAsync();
 
+            vm.IsSortDescending = true;
             vm.SelectedSort = VideoSort.FileModified;
 
             var season = (SeasonItemViewModel)vm.VisibleItems[0];
@@ -918,26 +920,68 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
-    public async Task ScanAsync_DefaultsToTitleAscending()
+    public void SortDirection_DefaultsToAscendingAndRemainsSelectedAcrossCriteria()
     {
         var root = Directory.CreateTempSubdirectory("dabom-sort-");
         try
         {
-            var zulu = Path.Combine(root.FullName, "Zulu.mkv");
             var alpha = Path.Combine(root.FullName, "Alpha.mkv");
-            var vm = CreateViewModel(
-                new LibraryStore(root.FullName),
-                new StubScanner(zulu, alpha),
-                CachedData(root.FullName, zulu, alpha));
+            var bravo = Path.Combine(root.FullName, "Bravo.mkv");
+            var charlie = Path.Combine(root.FullName, "Charlie.mkv");
+            var alphaTime = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var bravoTime = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var charlieTime = new DateTimeOffset(2022, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            var store = new LibraryStore(root.FullName);
+            var vm = CreateViewModel(store, new StubScanner(), new LibraryData());
+            vm.Videos.Add(new VideoItemViewModel(charlie, new VideoRecord
+            {
+                Title = "Charlie",
+                ReleaseDate = new DateOnly(2020, 1, 1),
+                LastWriteTimeUtc = charlieTime
+            }, store));
+            vm.Videos.Add(new VideoItemViewModel(alpha, new VideoRecord
+            {
+                Title = "Alpha",
+                ReleaseDate = new DateOnly(2024, 1, 1),
+                LastWriteTimeUtc = alphaTime
+            }, store));
+            vm.Videos.Add(new VideoItemViewModel(bravo, new VideoRecord
+            {
+                Title = "Bravo",
+                ReleaseDate = new DateOnly(2022, 1, 1),
+                LastWriteTimeUtc = bravoTime
+            }, store));
 
-            await vm.ScanAsync();
-
-            var titles = vm.VisibleVideos.Cast<VideoItemViewModel>()
+            string[] Titles() => vm.VisibleVideos.Cast<VideoItemViewModel>()
                 .Select(video => video.DisplayTitle)
                 .ToArray();
-            Assert.AreEqual(2, titles.Length, $"실제 제목: {string.Join(", ", titles)}; 상태: {vm.StatusMessage}");
-            CollectionAssert.AreEqual(new[] { "Alpha", "Zulu" }, titles);
+
+            var initialTitles = Titles();
+            Assert.AreEqual(
+                3,
+                initialTitles.Length,
+                $"실제 제목: {string.Join(", ", initialTitles)}; 상태: {vm.StatusMessage}");
+            CollectionAssert.AreEqual(new[] { "Alpha", "Bravo", "Charlie" }, initialTitles);
             Assert.AreEqual(VideoSort.Title, vm.SelectedSort);
+            Assert.IsFalse(vm.IsSortDescending);
+            var toggleDirection = typeof(MainViewModel)
+                .GetProperty("ToggleSortDirectionCommand")?
+                .GetValue(vm) as System.Windows.Input.ICommand;
+            Assert.IsNotNull(toggleDirection, "정렬 방향 전환 명령이 필요합니다.");
+
+            toggleDirection.Execute(null);
+            CollectionAssert.AreEqual(new[] { "Charlie", "Bravo", "Alpha" }, Titles());
+
+            vm.SelectedSort = VideoSort.ReleaseDate;
+            CollectionAssert.AreEqual(new[] { "Alpha", "Bravo", "Charlie" }, Titles());
+            Assert.IsTrue(vm.IsSortDescending);
+
+            toggleDirection.Execute(null);
+            CollectionAssert.AreEqual(new[] { "Charlie", "Bravo", "Alpha" }, Titles());
+
+            vm.SelectedSort = VideoSort.FileModified;
+            CollectionAssert.AreEqual(new[] { "Alpha", "Charlie", "Bravo" }, Titles());
+            Assert.IsFalse(vm.IsSortDescending);
         }
         finally
         {
@@ -2215,6 +2259,7 @@ public sealed class MainViewModelTests
                     new LibraryStore(root.FullName),
                     new StubScanner(firstPath, secondPath), data);
                 await vm.ScanAsync();
+                vm.IsSortDescending = true;
                 vm.SelectedSort = VideoSort.ReleaseDate;
                 vm.SelectedVideo = vm.Videos.Single(video => video.Path == firstPath);
                 var editor = vm.CreateMetadataEditor();

@@ -657,6 +657,29 @@
                                 <ComboBoxItem Content="개봉일" Tag="{x:Static library:VideoSort.ReleaseDate}" />
                                 <ComboBoxItem Content="파일 수정일" Tag="{x:Static library:VideoSort.FileModified}" />
                             </ComboBox>
+                            <Button x:Name="SortDirectionButton"
+                                    Width="40" Height="40" Margin="8,0,0,0" Padding="0"
+                                    Command="{Binding ToggleSortDirectionCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button"
+                                           BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Content" Value="↑" />
+                                        <Setter Property="FontSize" Value="17" />
+                                        <Setter Property="Background" Value="#E0222325" />
+                                        <Setter Property="AutomationProperties.Name" Value="정렬 방향: 오름차순" />
+                                        <Setter Property="ToolTip" Value="현재 오름차순 · 클릭하여 내림차순" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSortDescending}" Value="True">
+                                                <Setter Property="Content" Value="↓" />
+                                                <Setter Property="AutomationProperties.Name"
+                                                        Value="정렬 방향: 내림차순" />
+                                                <Setter Property="ToolTip"
+                                                        Value="현재 내림차순 · 클릭하여 오름차순" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
                         </StackPanel>
                     </Grid>
                 </Border>

@@ -108,6 +108,8 @@ public sealed class MainViewModel : ViewModelBase
         RemoveLocationCommand = new RelayCommand(
             path => _ = RemoveLocationAsync((string)path!),
             path => CanMutateLibrary && path is string);
+        ToggleSortDirectionCommand = new RelayCommand(
+            _ => IsSortDescending = !IsSortDescending);
         Locations = new(data.Locations);
         _isInitialLibraryLoad = Locations.Count > 0;
         _visibleVideos = (ListCollectionView)CollectionViewSource.GetDefaultView(Videos);
@@ -135,6 +137,7 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand PlayFeaturedCommand { get; }
     public ICommand OpenMetadataCommand { get; }
     public ICommand RemoveLocationCommand { get; }
+    public ICommand ToggleSortDirectionCommand { get; }
     public event EventHandler<MetadataEditorViewModel>? MetadataEditRequested;
     public event EventHandler<ToastRequest>? ToastRequested;
 
@@ -410,6 +413,16 @@ public sealed class MainViewModel : ViewModelBase
         set
         {
             if (Set(ref _selectedSort, value)) ApplySort();
+        }
+    }
+
+    private bool _isSortDescending;
+    public bool IsSortDescending
+    {
+        get => _isSortDescending;
+        set
+        {
+            if (Set(ref _isSortDescending, value)) ApplySort();
         }
     }
 
@@ -1251,10 +1264,16 @@ public sealed class MainViewModel : ViewModelBase
     {
         _visibleVideos.CustomSort = Comparer<VideoItemViewModel>.Create((left, right) => SelectedSort switch
         {
-            VideoSort.ReleaseDate => CompareNullableDescending(
-                left.Record.ReleaseDate, right.Record.ReleaseDate),
-            VideoSort.FileModified => right.Record.LastWriteTimeUtc.CompareTo(left.Record.LastWriteTimeUtc),
-            _ => StringComparer.CurrentCultureIgnoreCase.Compare(left.DisplayTitle, right.DisplayTitle)
+            VideoSort.ReleaseDate => CompareNullable(
+                left.Record.ReleaseDate,
+                right.Record.ReleaseDate,
+                IsSortDescending),
+            VideoSort.FileModified => IsSortDescending
+                ? right.Record.LastWriteTimeUtc.CompareTo(left.Record.LastWriteTimeUtc)
+                : left.Record.LastWriteTimeUtc.CompareTo(right.Record.LastWriteTimeUtc),
+            _ => IsSortDescending
+                ? StringComparer.CurrentCultureIgnoreCase.Compare(right.DisplayTitle, left.DisplayTitle)
+                : StringComparer.CurrentCultureIgnoreCase.Compare(left.DisplayTitle, right.DisplayTitle)
         });
         RefreshLibraryView(false);
     }
@@ -1268,12 +1287,15 @@ public sealed class MainViewModel : ViewModelBase
         ((RelayCommand)RemoveLocationCommand).RaiseCanExecuteChanged();
     }
 
-    private static int CompareNullableDescending<T>(T? left, T? right)
-        where T : struct, IComparable<T> =>
-        left.HasValue && right.HasValue ? right.Value.CompareTo(left.Value)
-        : left.HasValue ? -1
-        : right.HasValue ? 1
-        : 0;
+    private static int CompareNullable<T>(T? left, T? right, bool descending)
+        where T : struct, IComparable<T>
+    {
+        if (!left.HasValue) return right.HasValue ? 1 : 0;
+        if (!right.HasValue) return -1;
+        return descending
+            ? right.Value.CompareTo(left.Value)
+            : left.Value.CompareTo(right.Value);
+    }
 
     private static bool LaunchWithWindows(string path)
     {

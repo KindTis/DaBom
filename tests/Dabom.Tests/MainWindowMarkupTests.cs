@@ -225,6 +225,10 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"정렬\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"영상 검색\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"정렬\"");
+        StringAssert.Contains(markup, "<Button x:Name=\"SortDirectionButton\"");
+        StringAssert.Contains(markup, "Command=\"{Binding ToggleSortDirectionCommand}\"");
+        StringAssert.Contains(markup, "Value=\"정렬 방향: 오름차순\"");
+        StringAssert.Contains(markup, "Value=\"정렬 방향: 내림차순\"");
     }
 
     [TestMethod]
