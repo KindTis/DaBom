@@ -821,6 +821,90 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(code, "viewModel.NotifyMissingSelection();");
     }
 
+    [STATestMethod]
+    [DoNotParallelize]
+    public void SeasonNavigation_ResetsEntryScrollAndRestoresLibraryOffset()
+    {
+        EnsureApplicationResources();
+        var root = Directory.CreateTempSubdirectory("dabom-season-scroll-");
+        var store = new LibraryStore(root.FullName);
+        var viewModel = new MainViewModel(
+            store,
+            new LibraryScanner(),
+            new LibraryData(),
+            _ => true,
+            () => DateTimeOffset.UtcNow,
+            _ => 0);
+        viewModel.Videos.Add(new VideoItemViewModel(
+            Path.Combine(root.FullName, "Episode1.mkv"),
+            TvEpisode("에피소드 1", 1),
+            store));
+        viewModel.Videos.Add(new VideoItemViewModel(
+            Path.Combine(root.FullName, "Episode2.mkv"),
+            TvEpisode("에피소드 2", 2),
+            store));
+        viewModel.SearchText = "목록 갱신";
+        viewModel.SearchText = string.Empty;
+        var season = viewModel.VisibleItems.OfType<SeasonItemViewModel>().Single();
+        var window = new MainWindow
+        {
+            DataContext = viewModel,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -32_000,
+            Top = -32_000,
+            MinWidth = 0,
+            MinHeight = 0,
+            Width = 800,
+            Height = 320,
+            Opacity = 0,
+            ShowActivated = false,
+            ShowInTaskbar = false
+        };
+        void Pump() => window.Dispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+            new Action(() => { }));
+
+        try
+        {
+            var scroller = (ScrollViewer)window.FindName("MainScrollViewer");
+            var content = (FrameworkElement)window.FindName("MainScrollContent");
+            content.Height = 2_000;
+            window.Show();
+            Pump();
+            Assert.IsTrue(
+                scroller.ScrollableHeight > 0,
+                $"Extent={scroller.ExtentHeight}, Viewport={scroller.ViewportHeight}, Content={content.ActualHeight}");
+            var videoList = (ListBox)window.FindName("VideoList");
+            var seasonCard = (ListBoxItem?)videoList.ItemContainerGenerator
+                .ContainerFromItem(season);
+            Assert.IsNotNull(seasonCard);
+            seasonCard.BringIntoView();
+            Pump();
+            var returnOffset = scroller.VerticalOffset;
+            Assert.IsTrue(returnOffset > 0);
+
+            typeof(MainWindow)
+                .GetMethod(
+                    "OpenSeason",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(window, [season]);
+            Pump();
+
+            Assert.AreEqual(0, scroller.VerticalOffset, 0.1);
+
+            viewModel.CloseSeason();
+            Pump();
+
+            Assert.AreEqual(returnOffset, scroller.VerticalOffset, 0.1);
+        }
+        finally
+        {
+            window.Close();
+            root.Delete(true);
+        }
+    }
+
     [DataTestMethod]
     [DataRow(-20d, 100d, 600d, true)]
     [DataRow(500d, 150d, 600d, true)]
@@ -1095,6 +1179,17 @@ public sealed class MainWindowMarkupTests
                     "/Dabom;component/Styles/DabomTheme.xaml",
                     UriKind.Relative)));
     }
+
+    private static VideoRecord TvEpisode(string title, int episodeNumber) => new()
+    {
+        Title = title,
+        MediaType = MediaType.TvEpisode,
+        SeriesTitle = "시리즈",
+        SeasonNumber = 1,
+        EpisodeNumber = episodeNumber,
+        FileSizeBytes = 1,
+        LastWriteTimeUtc = DateTimeOffset.UnixEpoch
+    };
 
     private static string ReadAboutWindowMarkup() =>
         File.ReadAllText(Path.Combine(ProjectDirectory(), "AboutWindow.xaml"));

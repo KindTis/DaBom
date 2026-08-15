@@ -341,6 +341,7 @@ public partial class MainWindow : Window
         if (viewModel.OpenSeason(season))
         {
             VideoList.Focus();
+            MainScrollViewer.ScrollToTop();
         }
     }
 
