@@ -341,8 +341,14 @@ public sealed class MetadataEnrichmentServiceTests
             null,
             CancellationToken.None);
 
-        Assert.AreEqual(MetadataStatus.Failed, committed[0].MetadataStatus);
-        Assert.AreEqual(MetadataStatus.Matched, committed[1].MetadataStatus);
+        Assert.AreEqual(
+            1,
+            committed.Count(record =>
+                record.MetadataStatus == MetadataStatus.Matched));
+        Assert.AreEqual(
+            1,
+            committed.Count(record =>
+                record.MetadataStatus == MetadataStatus.Failed));
         Assert.AreEqual(1, summary.Failed);
         Assert.AreEqual(1, summary.Matched);
     }
@@ -477,14 +483,20 @@ public sealed class MetadataEnrichmentServiceTests
             null,
             CancellationToken.None);
 
-        Assert.AreEqual(MetadataStatus.Failed, committed[0].MetadataStatus);
-        Assert.AreEqual(MetadataStatus.Matched, committed[1].MetadataStatus);
+        Assert.AreEqual(
+            1,
+            committed.Count(record =>
+                record.MetadataStatus == MetadataStatus.Matched));
+        Assert.AreEqual(
+            1,
+            committed.Count(record =>
+                record.MetadataStatus == MetadataStatus.Failed));
         Assert.AreEqual(2, provider.SearchCalls);
         Assert.IsTrue(summary.AuthenticationFailed);
     }
 
     [TestMethod]
-    public async Task EnrichAsync_WhenRetryAfterExceedsRemainingBudget_FallsBackAndCoolsDownProvider()
+    public async Task EnrichAsync_WhenRetryAfterExceedsRemainingBudget_FallsBackWithoutWaiting()
     {
         var now = DateTimeOffset.Parse("2026-07-25T00:00:00Z");
         var delayed = FakeProvider.Failing(
@@ -501,9 +513,7 @@ public sealed class MetadataEnrichmentServiceTests
             ]),
             (candidate, _) => Task.FromResult(
                 MovieDetails(candidate.ResourceId, candidate.ResourceId, "fallback")));
-        var records = Records(
-            ("First.Movie.mkv", MetadataStatus.Pending),
-            ("Second.Movie.mkv", MetadataStatus.Pending));
+        var records = Records(("Movie.mkv", MetadataStatus.Pending));
         var service = new MetadataEnrichmentService(
             new MediaFilenameParser(),
             [delayed, fallback],
@@ -520,9 +530,301 @@ public sealed class MetadataEnrichmentServiceTests
             null,
             CancellationToken.None);
 
-        Assert.AreEqual(2, summary.Matched);
+        Assert.AreEqual(1, summary.Matched);
         Assert.AreEqual(1, delayed.SearchCalls);
-        Assert.AreEqual(2, fallback.SearchCalls);
+        Assert.AreEqual(1, fallback.SearchCalls);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_LimitsConcurrentCollectionToThreeAndAllowsOverlap()
+    {
+        var sync = new object();
+        var active = 0;
+        var peak = 0;
+        var started = 0;
+        var threeStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeProvider(
+            "fake",
+            async (query, token) =>
+            {
+                lock (sync)
+                {
+                    active++;
+                    peak = Math.Max(peak, active);
+                    if (++started == 3) threeStarted.TrySetResult();
+                }
+                try
+                {
+                    await release.Task.WaitAsync(token);
+                    return
+                    [
+                        new("fake", "movie", query.Title, MediaType.Movie)
+                    ];
+                }
+                finally
+                {
+                    lock (sync) active--;
+                }
+            },
+            (candidate, _) => Task.FromResult(
+                MovieDetails(candidate.ResourceId, candidate.ResourceId)));
+        var records = Records(
+            ("One.Movie.mkv", MetadataStatus.Pending),
+            ("Two.Movie.mkv", MetadataStatus.Pending),
+            ("Three.Movie.mkv", MetadataStatus.Pending),
+            ("Four.Movie.mkv", MetadataStatus.Pending));
+
+        var run = CreateService(provider).EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, _, _, _) => Task.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        await threeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(3, peak);
+        Assert.AreEqual(3, provider.SearchCalls);
+        release.TrySetResult();
+        var summary = await run;
+
+        Assert.AreEqual(4, summary.Matched);
+        Assert.AreEqual(4, provider.SearchCalls);
+        Assert.AreEqual(3, peak);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_SerializesCommitsAndReportsAfterEachAttempt()
+    {
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+            [
+                new("fake", "movie", query.Title, MediaType.Movie)
+            ]),
+            (candidate, _) => Task.FromResult(
+                MovieDetails(candidate.ResourceId, candidate.ResourceId)));
+        var records = Records(
+            ("One.Movie.mkv", MetadataStatus.Pending),
+            ("Two.Movie.mkv", MetadataStatus.Pending),
+            ("Three.Movie.mkv", MetadataStatus.Pending),
+            ("Four.Movie.mkv", MetadataStatus.Pending));
+        var activeCommits = 0;
+        var peakCommits = 0;
+        var commitSync = new object();
+        var attempts = 0;
+        var finishedAttempts = 0;
+        var progress = new List<MetadataProgress>();
+        var progressAfterAttempts = new List<int>();
+
+        var summary = await CreateService(provider).EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            async (_, _, _, token) =>
+            {
+                var active = Interlocked.Increment(ref activeCommits);
+                lock (commitSync)
+                {
+                    peakCommits = Math.Max(peakCommits, active);
+                }
+                var attempt = Interlocked.Increment(ref attempts);
+                try
+                {
+                    await Task.Delay(20, token);
+                    if (attempt == 2) throw new IOException("disk full");
+                }
+                finally
+                {
+                    Interlocked.Increment(ref finishedAttempts);
+                    Interlocked.Decrement(ref activeCommits);
+                }
+            },
+            value =>
+            {
+                progress.Add(value);
+                progressAfterAttempts.Add(Volatile.Read(ref finishedAttempts));
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(1, peakCommits);
+        CollectionAssert.AreEqual(
+            new[] { 1, 2, 3, 4 },
+            progress.Select(value => value.Completed).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 1, 2, 3, 4 },
+            progressAfterAttempts.ToArray());
+        Assert.AreEqual(3, summary.Matched);
+        Assert.AreEqual(1, summary.Failed);
+        Assert.AreEqual(4, summary.Matched + summary.NotFound + summary.Failed);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_CancellationKeepsCommittedItemAndSkipsUnconfirmedProgress()
+    {
+        var records = Records(
+            ("First.Movie.mkv", MetadataStatus.Pending),
+            ("Second.Movie.mkv", MetadataStatus.Pending));
+        var data = new LibraryData { VideosByPath = records };
+        var store = new LibraryStore(_root.FullName);
+        await store.SaveAsync(data);
+        var firstCommitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+            [
+                new("fake", "movie", query.Title, MediaType.Movie)
+            ]),
+            async (candidate, token) =>
+            {
+                if (candidate.ResourceId == "Second Movie")
+                {
+                    secondStarted.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                return MovieDetails(candidate.ResourceId, candidate.ResourceId);
+            });
+        var progress = new List<MetadataProgress>();
+        using var cancellation = new CancellationTokenSource();
+
+        var run = CreateService(provider).EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            async (path, record, createdPoster, token) =>
+            {
+                var nextRecords = new Dictionary<string, VideoRecord>(
+                    data.VideosByPath,
+                    StringComparer.OrdinalIgnoreCase)
+                {
+                    [path] = record
+                };
+                var next = data with { VideosByPath = nextRecords };
+                await store.SaveAsync(next, createdPoster, token);
+                data = next;
+                firstCommitted.TrySetResult();
+            },
+            progress.Add,
+            cancellation.Token);
+
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstCommitted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => run);
+
+        var persisted = await new LibraryStore(_root.FullName)
+            .LoadAsync(CancellationToken.None);
+        Assert.AreEqual(
+            MetadataStatus.Matched,
+            persisted.VideosByPath[Path.GetFullPath("First.Movie.mkv")]
+                .MetadataStatus);
+        Assert.AreEqual(
+            MetadataStatus.Pending,
+            persisted.VideosByPath[Path.GetFullPath("Second.Movie.mkv")]
+                .MetadataStatus);
+        Assert.AreEqual(1, progress.Count);
+        Assert.AreEqual(1, progress.Single().Completed);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_ConcurrentRetryAfterKeepsLatestAbsoluteExpiry()
+    {
+        var origin = DateTimeOffset.Parse("2026-08-15T00:00:00Z");
+        var nowTicks = origin.UtcTicks;
+        var releaseRate = Enumerable.Range(0, 3)
+            .Select(_ => new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var allRateStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var rateCalls = 0;
+        var fallbackCalls = 0;
+        var fallbackArrived = Enumerable.Range(0, 3)
+            .Select(_ => new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var releaseFallback = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retries = new[]
+        {
+            TimeSpan.FromMinutes(5),
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2)
+        };
+        var rateLimited = new FakeProvider(
+            "rate",
+            async (_, token) =>
+            {
+                var callCount = Interlocked.Increment(ref rateCalls);
+                if (callCount == 3) allRateStarted.TrySetResult();
+                var call = callCount - 1;
+                if (call >= releaseRate.Length)
+                {
+                    throw new AssertFailedException(
+                        "가장 늦은 중단 시각 전에는 네 번째 요청을 시작하면 안 됩니다.");
+                }
+                await releaseRate[call].Task.WaitAsync(token);
+                throw new MetadataProviderException(
+                    MetadataProviderFailureKind.Transient,
+                    "rate limited",
+                    retries[call]);
+            },
+            (_, _) => throw new AssertFailedException("상세 조회를 호출하면 안 됩니다."));
+        var fallback = new FakeProvider(
+            "fallback",
+            async (query, token) =>
+            {
+                var call = Interlocked.Increment(ref fallbackCalls);
+                if (call <= fallbackArrived.Length)
+                    fallbackArrived[call - 1].TrySetResult();
+                await releaseFallback.Task.WaitAsync(token);
+                return
+                [
+                    new("fallback", "movie", query.Title, MediaType.Movie)
+                ];
+            },
+            (candidate, _) => Task.FromResult(
+                MovieDetails(candidate.ResourceId, candidate.ResourceId, "fallback")));
+        var records = Records(
+            ("One.Movie.mkv", MetadataStatus.Pending),
+            ("Two.Movie.mkv", MetadataStatus.Pending),
+            ("Three.Movie.mkv", MetadataStatus.Pending),
+            ("Four.Movie.mkv", MetadataStatus.Pending));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [rateLimited, fallback],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            TimeSpan.FromSeconds(10),
+            () => new DateTimeOffset(Interlocked.Read(ref nowTicks), TimeSpan.Zero),
+            (_, _) => throw new AssertFailedException("Retry-After를 기다리면 안 됩니다."));
+
+        var run = service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, _, _, _) => Task.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        await allRateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseRate[0].TrySetResult();
+        await fallbackArrived[0].Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseRate[2].TrySetResult();
+        await fallbackArrived[1].Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseRate[1].TrySetResult();
+        await fallbackArrived[2].Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Interlocked.Exchange(
+            ref nowTicks,
+            origin.AddMinutes(3).UtcTicks);
+        releaseFallback.TrySetResult();
+
+        var summary = await run;
+        Assert.AreEqual(3, rateCalls);
+        Assert.AreEqual(4, fallbackCalls);
+        Assert.AreEqual(4, summary.Matched);
     }
 
     [TestMethod]
@@ -1020,14 +1322,17 @@ public sealed class MetadataEnrichmentServiceTests
         : IMetadataProvider
     {
         public string ProviderKey { get; } = providerKey;
-        public int SearchCalls { get; private set; }
-        public int DetailsCalls { get; private set; }
+        private int _searchCalls;
+        private int _detailsCalls;
+
+        public int SearchCalls => Volatile.Read(ref _searchCalls);
+        public int DetailsCalls => Volatile.Read(ref _detailsCalls);
 
         public async Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
             MetadataQuery query,
             CancellationToken cancellationToken)
         {
-            SearchCalls++;
+            Interlocked.Increment(ref _searchCalls);
             return await search(query, cancellationToken);
         }
 
@@ -1035,7 +1340,7 @@ public sealed class MetadataEnrichmentServiceTests
             MetadataCandidate candidate,
             CancellationToken cancellationToken)
         {
-            DetailsCalls++;
+            Interlocked.Increment(ref _detailsCalls);
             return await details(candidate, cancellationToken);
         }
 

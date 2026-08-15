@@ -1,4 +1,6 @@
 using Dabom.Library;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Net.Http;
 
 namespace Dabom.Metadata;
@@ -69,7 +71,7 @@ public sealed class MetadataEnrichmentService
         CancellationToken cancellationToken)
     {
         var unavailableUntil =
-            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+            new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var deadline = _utcNow() + _itemBudget;
         using var budget = new CancellationTokenSource(_itemBudget);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
@@ -130,7 +132,7 @@ public sealed class MetadataEnrichmentService
                 MetadataProviderFailureKind.InvalidResponse,
                 "검색 후보를 제공한 메타데이터 공급자를 찾을 수 없습니다.");
         var unavailableUntil =
-            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+            new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var deadline = _utcNow() + _itemBudget;
         using var budget = new CancellationTokenSource(_itemBudget);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
@@ -183,185 +185,230 @@ public sealed class MetadataEnrichmentService
                     or MetadataStatus.Failed)
             .ToArray();
         var unavailableUntil =
-            new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+            new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        using var commitGate = new SemaphoreSlim(1, 1);
         var matched = 0;
         var notFound = 0;
         var failed = 0;
         var authenticationFailed = false;
         var completed = 0;
 
-        foreach (var path in targets)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var current = records[path];
-            var requireSuccess = requiredSuccessPaths?.Contains(path) == true;
-            var query = _parser.Parse(path);
-            VideoRecord updated;
-            string? createdPoster = null;
-            var commitSucceeded = false;
-
-            if (query is null)
-            {
-                updated = current with
+            await Parallel.ForEachAsync(
+                targets,
+                new ParallelOptions
                 {
-                    MetadataStatus = MetadataStatus.NotFound
-                };
-            }
-            else
-            {
-                var deadline = _utcNow() + _itemBudget;
-                using var budget = new CancellationTokenSource(_itemBudget);
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken,
-                    budget.Token);
-                MetadataDetails? selected = null;
-                var hadProviderError = false;
-
-                foreach (var provider in _providers)
+                    MaxDegreeOfParallelism = 3,
+                    CancellationToken = cancellationToken
+                },
+                async (path, token) =>
                 {
-                    if (unavailableUntil.TryGetValue(
-                            provider.ProviderKey,
-                            out var until)
-                        && until > _utcNow())
-                    {
-                        hadProviderError = true;
-                        continue;
-                    }
+                var current = records[path];
+                var requireSuccess = requiredSuccessPaths?.Contains(path) == true;
+                var query = _parser.Parse(path);
+                VideoRecord updated;
+                string? createdPoster = null;
+                var itemAuthenticationFailed = false;
 
-                    try
-                    {
-                        var candidates = await ExecuteProviderCallAsync(
-                            provider,
-                            token => provider.SearchAsync(query, token),
-                            deadline,
-                            unavailableUntil,
-                            linked.Token,
-                            cancellationToken);
-                        if (candidates.Count == 0) continue;
-                        var candidate = candidates[0];
-                        if (candidate.MediaType != query.MediaType)
-                        {
-                            hadProviderError = true;
-                            continue;
-                        }
-
-                        var details = await ExecuteProviderCallAsync(
-                            provider,
-                            token => provider.GetDetailsAsync(candidate, token),
-                            deadline,
-                            unavailableUntil,
-                            linked.Token,
-                            cancellationToken);
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (!IsComplete(provider, query.MediaType, details))
-                        {
-                            hadProviderError = true;
-                            continue;
-                        }
-
-                        if (details.OptionalIssue is { } issue)
-                        {
-                            authenticationFailed |=
-                                issue.Kind
-                                == MetadataProviderFailureKind.Authentication;
-                            if (issue.RetryAfter is { } retryAfter)
-                            {
-                                unavailableUntil[provider.ProviderKey] =
-                                    _utcNow() + retryAfter;
-                            }
-                        }
-
-                        selected = details;
-                        break;
-                    }
-                    catch (MetadataProviderException error)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        hadProviderError = true;
-                        authenticationFailed |=
-                            error.Kind
-                            == MetadataProviderFailureKind.Authentication;
-                        if (error.RetryAfter is { } retryAfter)
-                        {
-                            unavailableUntil[provider.ProviderKey] =
-                                _utcNow() + retryAfter;
-                        }
-                    }
-                    catch (OperationCanceledException)
-                        when (budget.IsCancellationRequested
-                            && !cancellationToken.IsCancellationRequested)
-                    {
-                        hadProviderError = true;
-                        break;
-                    }
-                }
-
-                if (selected is null)
+                if (query is null)
                 {
                     updated = current with
                     {
-                        MetadataStatus = hadProviderError
-                            ? MetadataStatus.Failed
-                            : MetadataStatus.NotFound
+                        MetadataStatus = MetadataStatus.NotFound
                     };
                 }
                 else
                 {
-                    (updated, createdPoster) = await ApplyDetailsAsync(
-                        current,
-                        selected,
-                        requireSuccess,
-                        linked.Token,
-                        cancellationToken);
+                    var deadline = _utcNow() + _itemBudget;
+                    using var budget = new CancellationTokenSource(_itemBudget);
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                        token,
+                        budget.Token);
+                    MetadataDetails? selected = null;
+                    var hadProviderError = false;
+
+                    foreach (var provider in _providers)
+                    {
+                        if (unavailableUntil.TryGetValue(
+                                provider.ProviderKey,
+                                out var until)
+                            && until > _utcNow())
+                        {
+                            hadProviderError = true;
+                            continue;
+                        }
+
+                        try
+                        {
+                            var candidates = await ExecuteProviderCallAsync(
+                                provider,
+                                providerToken => provider.SearchAsync(
+                                    query,
+                                    providerToken),
+                                deadline,
+                                unavailableUntil,
+                                linked.Token,
+                                token);
+                            if (candidates.Count == 0) continue;
+                            var candidate = candidates[0];
+                            if (candidate.MediaType != query.MediaType)
+                            {
+                                hadProviderError = true;
+                                continue;
+                            }
+
+                            var details = await ExecuteProviderCallAsync(
+                                provider,
+                                providerToken => provider.GetDetailsAsync(
+                                    candidate,
+                                    providerToken),
+                                deadline,
+                                unavailableUntil,
+                                linked.Token,
+                                token);
+                            token.ThrowIfCancellationRequested();
+                            if (!IsComplete(provider, query.MediaType, details))
+                            {
+                                hadProviderError = true;
+                                continue;
+                            }
+
+                            if (details.OptionalIssue is { } issue)
+                            {
+                                itemAuthenticationFailed |=
+                                    issue.Kind
+                                    == MetadataProviderFailureKind.Authentication;
+                                if (issue.RetryAfter is { } retryAfter)
+                                {
+                                    ExtendUnavailableUntil(
+                                        unavailableUntil,
+                                        provider.ProviderKey,
+                                        retryAfter);
+                                }
+                            }
+
+                            selected = details;
+                            break;
+                        }
+                        catch (MetadataProviderException error)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            hadProviderError = true;
+                            itemAuthenticationFailed |=
+                                error.Kind
+                                == MetadataProviderFailureKind.Authentication;
+                            if (error.RetryAfter is { } retryAfter)
+                            {
+                                ExtendUnavailableUntil(
+                                    unavailableUntil,
+                                    provider.ProviderKey,
+                                    retryAfter);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                            when (budget.IsCancellationRequested
+                                && !token.IsCancellationRequested)
+                        {
+                            hadProviderError = true;
+                            break;
+                        }
+                    }
+
+                    if (selected is null)
+                    {
+                        updated = current with
+                        {
+                            MetadataStatus = hadProviderError
+                                ? MetadataStatus.Failed
+                                : MetadataStatus.NotFound
+                        };
+                    }
+                    else
+                    {
+                        (updated, createdPoster) = await ApplyDetailsAsync(
+                            current,
+                            selected,
+                            requireSuccess,
+                            linked.Token,
+                            token);
+                    }
                 }
-            }
 
-            if (requireSuccess && updated.MetadataStatus != MetadataStatus.Matched)
-            {
-                updated = updated with { MetadataStatus = MetadataStatus.Failed };
-            }
-
-            try
-            {
-                await commitAsync(
-                    path,
-                    updated,
-                    createdPoster,
-                    cancellationToken);
-                commitSucceeded = true;
-                switch (updated.MetadataStatus)
+                if (requireSuccess
+                    && updated.MetadataStatus != MetadataStatus.Matched)
                 {
-                    case MetadataStatus.Matched:
-                        matched++;
-                        break;
-                    case MetadataStatus.NotFound:
-                        notFound++;
-                        break;
-                    default:
-                        failed++;
-                        break;
+                    updated = updated with
+                    {
+                        MetadataStatus = MetadataStatus.Failed
+                    };
                 }
-            }
-            catch (OperationCanceledException)
-                when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                failed++;
-            }
 
-            completed++;
-            progress?.Invoke(new(
-                path,
-                completed,
-                targets.Length,
-                matched,
-                notFound,
-                failed,
-                updated.MetadataStatus,
-                commitSucceeded));
+                try
+                {
+                    await commitGate.WaitAsync(token);
+                }
+                catch
+                {
+                    try { _store.DeletePoster(createdPoster); }
+                    catch (Exception error) when (
+                        error is IOException or UnauthorizedAccessException) { }
+                    throw;
+                }
+
+                try
+                {
+                    var commitSucceeded = false;
+                    try
+                    {
+                        await commitAsync(path, updated, createdPoster, token);
+                        commitSucceeded = true;
+                        switch (updated.MetadataStatus)
+                        {
+                            case MetadataStatus.Matched:
+                                matched++;
+                                break;
+                            case MetadataStatus.NotFound:
+                                notFound++;
+                                break;
+                            default:
+                                failed++;
+                                break;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                        when (token.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        failed++;
+                    }
+
+                    authenticationFailed |= itemAuthenticationFailed;
+                    completed++;
+                    progress?.Invoke(new(
+                        path,
+                        completed,
+                        targets.Length,
+                        matched,
+                        notFound,
+                        failed,
+                        updated.MetadataStatus,
+                        commitSucceeded));
+                }
+                finally
+                {
+                    commitGate.Release();
+                }
+                });
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
         }
 
         return new(matched, notFound, failed, authenticationFailed);
@@ -371,7 +418,7 @@ public sealed class MetadataEnrichmentService
         IMetadataProvider provider,
         Func<CancellationToken, Task<T>> call,
         DateTimeOffset deadline,
-        IDictionary<string, DateTimeOffset> unavailableUntil,
+        ConcurrentDictionary<string, DateTimeOffset> unavailableUntil,
         CancellationToken linkedToken,
         CancellationToken cancellationToken)
     {
@@ -390,8 +437,10 @@ public sealed class MetadataEnrichmentService
             {
                 if (error.RetryAfter is { } retryAfter)
                 {
-                    unavailableUntil[provider.ProviderKey] =
-                        _utcNow() + retryAfter;
+                    ExtendUnavailableUntil(
+                        unavailableUntil,
+                        provider.ProviderKey,
+                        retryAfter);
                 }
 
                 if (error.Kind != MetadataProviderFailureKind.Transient
@@ -418,6 +467,18 @@ public sealed class MetadataEnrichmentService
                 }
             }
         }
+    }
+
+    private void ExtendUnavailableUntil(
+        ConcurrentDictionary<string, DateTimeOffset> unavailableUntil,
+        string providerKey,
+        TimeSpan retryAfter)
+    {
+        var observedUntil = _utcNow() + retryAfter;
+        unavailableUntil.AddOrUpdate(
+            providerKey,
+            observedUntil,
+            (_, current) => current >= observedUntil ? current : observedUntil);
     }
 
     private async Task<(VideoRecord Record, string? CreatedPoster)>
