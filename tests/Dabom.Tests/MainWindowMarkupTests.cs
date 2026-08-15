@@ -846,30 +846,33 @@ public sealed class MainWindowMarkupTests
         viewModel.SearchText = "목록 갱신";
         viewModel.SearchText = string.Empty;
         var season = viewModel.VisibleItems.OfType<SeasonItemViewModel>().Single();
-        var window = new MainWindow
-        {
-            DataContext = viewModel,
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = -32_000,
-            Top = -32_000,
-            MinWidth = 0,
-            MinHeight = 0,
-            Width = 800,
-            Height = 320,
-            Opacity = 0,
-            ShowActivated = false,
-            ShowInTaskbar = false
-        };
+        var window = new MainWindow { DataContext = viewModel };
+        System.Windows.Interop.HwndSource? host = null;
         void Pump() => window.Dispatcher.Invoke(
             System.Windows.Threading.DispatcherPriority.ApplicationIdle,
             new Action(() => { }));
 
         try
         {
+            var rootVisual = (FrameworkElement)window.Content;
+            window.Content = null;
+            rootVisual.DataContext = viewModel;
+            host = new System.Windows.Interop.HwndSource(
+                new System.Windows.Interop.HwndSourceParameters
+                {
+                    WindowName = "DabomSeasonScrollTest",
+                    WindowStyle = 0,
+                    Width = 800,
+                    Height = 320,
+                    PositionX = -32_000,
+                    PositionY = -32_000
+                })
+            {
+                RootVisual = rootVisual
+            };
             var scroller = (ScrollViewer)window.FindName("MainScrollViewer");
             var content = (FrameworkElement)window.FindName("MainScrollContent");
             content.Height = 2_000;
-            window.Show();
             Pump();
             Assert.IsTrue(
                 scroller.ScrollableHeight > 0,
@@ -900,6 +903,7 @@ public sealed class MainWindowMarkupTests
         }
         finally
         {
+            host?.Dispose();
             window.Close();
             root.Delete(true);
         }
