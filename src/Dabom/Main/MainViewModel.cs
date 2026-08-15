@@ -3,8 +3,10 @@ using Dabom.Metadata;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Windows;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace Dabom.Main;
 
@@ -45,6 +47,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<int, int> _pickIndex;
     private readonly MetadataEnrichmentService? _metadataEnrichment;
+    private readonly CancellationToken _lifetimeToken;
     private readonly Func<string, FileProbeResult> _probeFile;
     private readonly Action<string> _moveToRecycleBin;
     private readonly ListCollectionView _visibleVideos;
@@ -58,11 +61,13 @@ public sealed class MainViewModel : ViewModelBase
         LibraryStore store,
         ILibraryScanner scanner,
         MetadataEnrichmentService metadataEnrichment,
-        LibraryData data)
+        LibraryData data,
+        CancellationToken lifetimeToken = default)
         : this(store, scanner, data, LaunchWithWindows,
             () => DateTimeOffset.UtcNow,
             maximum => Random.Shared.Next(maximum),
-            metadataEnrichment)
+            metadataEnrichment,
+            lifetimeToken: lifetimeToken)
     {
     }
 
@@ -75,7 +80,8 @@ public sealed class MainViewModel : ViewModelBase
         Func<int, int> pickIndex,
         MetadataEnrichmentService? metadataEnrichment = null,
         Func<string, FileProbeResult>? probeFile = null,
-        Action<string>? moveToRecycleBin = null)
+        Action<string>? moveToRecycleBin = null,
+        CancellationToken lifetimeToken = default)
     {
         _store = store;
         _scanner = scanner;
@@ -84,6 +90,7 @@ public sealed class MainViewModel : ViewModelBase
         _utcNow = utcNow;
         _pickIndex = pickIndex;
         _metadataEnrichment = metadataEnrichment;
+        _lifetimeToken = lifetimeToken;
         _probeFile = probeFile ?? WindowsFileOperations.Probe;
         _moveToRecycleBin = moveToRecycleBin ?? WindowsFileOperations.MoveToRecycleBin;
         RescanCommand = new AsyncRelayCommand(ScanAsync, () => CanMutateLibrary);
@@ -424,6 +431,10 @@ public sealed class MainViewModel : ViewModelBase
     private async Task ScanAsync(bool preserveFeatured)
     {
         if (IsScanning || IsRecordingPlayback) return;
+        var uiDispatcher =
+            SynchronizationContext.Current is DispatcherSynchronizationContext
+                ? Dispatcher.CurrentDispatcher
+                : Application.Current?.Dispatcher;
         IsScanning = true;
         try
         {
@@ -445,7 +456,7 @@ public sealed class MainViewModel : ViewModelBase
                     _data.Locations,
                     _data.VideosByPath,
                     progress,
-                    CancellationToken.None);
+                    _lifetimeToken);
             }
             finally
             {
@@ -526,22 +537,67 @@ public sealed class MainViewModel : ViewModelBase
             {
                 RequestToast($"보관 위치에 연결할 수 없습니다: {location}");
             }
-            var summary = _metadataEnrichment is null
-                ? new MetadataRunSummary(0, 0, 0, false)
-                : await _metadataEnrichment.EnrichAsync(
+            var committedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var summary = new MetadataRunSummary(0, 0, 0, false);
+            if (_metadataEnrichment is not null)
+            {
+                void ReportProgress(MetadataProgress value)
+                {
+                    if (uiDispatcher is null)
+                    {
+                        ShowMetadataProgress(value, newPaths);
+                        return;
+                    }
+
+                    uiDispatcher.BeginInvoke(
+                        DispatcherPriority.Normal,
+                        new Action(() => ShowMetadataProgress(value, newPaths)));
+                }
+
+                summary = await Task.Run(() => _metadataEnrichment.EnrichAsync(
                     _data.VideosByPath,
                     result.Videos.Keys.ToArray(),
-                    CommitEnrichedRecordAsync,
-                    progress => ShowMetadataProgress(progress, newPaths),
-                    CancellationToken.None,
-                    newPaths);
-            StatusMessage = summary.AuthenticationFailed
-                ? $"메타데이터 실패 {summary.Failed}건. .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
-                : summary.Matched + summary.NotFound + summary.Failed == 0
+                    (path, record, poster, token) => CommitEnrichedRecordAsync(
+                        path,
+                        record,
+                        poster,
+                        committedPaths,
+                        token),
+                    ReportProgress,
+                    _lifetimeToken,
+                    newPaths),
+                    _lifetimeToken);
+            }
+
+            async Task FinishMetadataAsync()
+            {
+                await ApplyEnrichedRecordsAsync(committedPaths);
+                var processed = summary.Matched + summary.NotFound + summary.Failed;
+                var finalMessage = processed == 0
                     ? result.Warnings.Count == 0
                         ? "폴더 확인을 마쳤습니다."
                         : $"폴더 확인을 마쳤습니다. 경고 {result.Warnings.Count}건"
-                    : $"메타데이터 적용 완료 · 성공 {summary.Matched} · 결과 없음 {summary.NotFound} · 실패 {summary.Failed}";
+                    : $"메타데이터 적용 완료 · 성공 {summary.Matched} · 결과 없음 {summary.NotFound} · 실패 {summary.Failed}"
+                        + (summary.AuthenticationFailed
+                            ? " · .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
+                            : string.Empty);
+                StatusMessage = finalMessage;
+                if (newPaths.Count > 0 && processed > 0)
+                {
+                    RequestToast(finalMessage);
+                }
+            }
+
+            if (uiDispatcher is null)
+            {
+                await FinishMetadataAsync();
+            }
+            else
+            {
+                await uiDispatcher.InvokeAsync(
+                    FinishMetadataAsync,
+                    DispatcherPriority.Background).Task.Unwrap();
+            }
         }
         catch (Exception error)
         {
@@ -844,6 +900,7 @@ public sealed class MainViewModel : ViewModelBase
         string path,
         VideoRecord updated,
         string? createdPoster,
+        ISet<string> committedPaths,
         CancellationToken cancellationToken)
     {
         var old = _data.VideosByPath[path];
@@ -857,11 +914,7 @@ public sealed class MainViewModel : ViewModelBase
         await _store.SaveAsync(next, createdPoster, cancellationToken);
 
         _data = next;
-        var video = Videos.Single(item =>
-            item.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-        video.Update(updated);
-        await video.LoadPosterAsync();
-        RefreshLibraryView(true);
+        committedPaths.Add(path);
 
         if (!string.Equals(
             old.Poster,
@@ -874,6 +927,25 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private async Task ApplyEnrichedRecordsAsync(
+        IReadOnlySet<string> committedPaths)
+    {
+        var videos = committedPaths
+            .Select(path => Videos.Single(video => video.Path.Equals(
+                path,
+                StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        foreach (var video in videos)
+        {
+            video.Update(_data.VideosByPath[video.Path]);
+        }
+        foreach (var video in videos)
+        {
+            await video.LoadPosterAsync();
+        }
+        if (videos.Length > 0) RefreshLibraryView(true);
+    }
+
     private void ShowMetadataProgress(
         MetadataProgress progress,
         IReadOnlySet<string> newPaths)
@@ -882,26 +954,11 @@ public sealed class MainViewModel : ViewModelBase
             $"메타데이터 처리 {progress.Completed}/{progress.Total} · "
             + $"성공 {progress.Matched} · 결과 없음 {progress.NotFound} · "
             + $"실패 {progress.Failed} · {Path.GetFileName(progress.Path)}";
-        if (!newPaths.Contains(progress.Path)) return;
-
-        if (!progress.CommitSucceeded)
+        if (newPaths.Contains(progress.Path) && !progress.CommitSucceeded)
         {
             RequestToast(
                 $"“{Path.GetFileName(progress.Path)}”을 라이브러리에 저장하지 못했습니다.");
-            return;
         }
-
-        if (progress.Status == MetadataStatus.Matched)
-        {
-            var video = Videos.Single(item => item.Path.Equals(
-                progress.Path,
-                StringComparison.OrdinalIgnoreCase));
-            RequestToast($"“{video.DisplayTitle}”이 추가되었습니다.");
-            return;
-        }
-
-        RequestToast(
-            $"“{Path.GetFileName(progress.Path)}”의 메타데이터 수집에 실패했습니다.");
     }
 
     private void ApplyCurrentVideos(

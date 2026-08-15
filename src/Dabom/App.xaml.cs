@@ -9,6 +9,7 @@ namespace Dabom;
 public partial class App : Application
 {
     private readonly HttpClient _httpClient = new();
+    private readonly CancellationTokenSource _lifetime = new();
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -34,7 +35,8 @@ public partial class App : Application
             store,
             new LibraryScanner(),
             enrichment,
-            data);
+            data,
+            _lifetime.Token);
         var window = new MainWindow { DataContext = viewModel };
         MainWindow = window;
         window.Show();
@@ -43,6 +45,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _lifetime.Cancel();
         _httpClient.Dispose();
         base.OnExit(e);
     }
