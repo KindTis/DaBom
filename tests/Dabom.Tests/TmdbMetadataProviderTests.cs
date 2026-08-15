@@ -800,6 +800,157 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
+    public async Task GetDetailsAsync_ConcurrentCallsLoadConfigurationOnce()
+    {
+        var configurationCalls = 0;
+        var configurationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConfiguration = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(async (request, token) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/3/configuration")
+            {
+                Interlocked.Increment(ref configurationCalls);
+                configurationStarted.TrySetResult();
+                await releaseConfiguration.Task.WaitAsync(token);
+                return Json("""
+                    {"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w500"]}}
+                    """);
+            }
+            if (path.EndsWith("/credits", StringComparison.Ordinal))
+            {
+                return Json("""{"cast":[],"crew":[]}""");
+            }
+            var id = path.Contains("/movie/1", StringComparison.Ordinal) ? 1 : 2;
+            return MovieResponse(id, $"/{id}.jpg");
+        });
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var first = provider.GetDetailsAsync(
+            new("tmdb", "movie", "1", MediaType.Movie),
+            CancellationToken.None);
+        var second = provider.GetDetailsAsync(
+            new("tmdb", "movie", "2", MediaType.Movie),
+            CancellationToken.None);
+
+        await configurationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseConfiguration.TrySetResult();
+        var results = await Task.WhenAll(first, second);
+
+        Assert.AreEqual(1, configurationCalls);
+        Assert.IsTrue(results.All(result => result.PosterUri is not null));
+    }
+
+    [TestMethod]
+    public async Task GetDetailsAsync_CanceledConfigurationLoadLetsWaitingCallRetry()
+    {
+        var configurationCalls = 0;
+        var firstConfigurationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(async (request, token) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/3/configuration")
+            {
+                if (Interlocked.Increment(ref configurationCalls) == 1)
+                {
+                    firstConfigurationStarted.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                return Json("""
+                    {"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w500"]}}
+                    """);
+            }
+            if (path.EndsWith("/credits", StringComparison.Ordinal))
+            {
+                return Json("""{"cast":[],"crew":[]}""");
+            }
+            var id = path.Contains("/movie/1", StringComparison.Ordinal) ? 1 : 2;
+            return MovieResponse(id, $"/{id}.jpg");
+        });
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+        using var firstBudget = new CancellationTokenSource();
+
+        var first = provider.GetDetailsAsync(
+            new("tmdb", "movie", "1", MediaType.Movie),
+            firstBudget.Token);
+        await firstConfigurationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var second = provider.GetDetailsAsync(
+            new("tmdb", "movie", "2", MediaType.Movie),
+            CancellationToken.None);
+        firstBudget.Cancel();
+        var firstResult = await first;
+        var secondResult = await second;
+
+        Assert.IsTrue(firstResult.PosterFailed);
+        Assert.IsNotNull(firstResult.OptionalIssue);
+        Assert.IsNotNull(secondResult.PosterUri);
+        Assert.IsFalse(secondResult.PosterFailed);
+        Assert.AreEqual(2, configurationCalls);
+    }
+
+    [TestMethod]
+    public async Task GetDetailsAsync_FailedConfigurationLoadLetsWaitingCallRetry()
+    {
+        var configurationCalls = 0;
+        var firstConfigurationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondCreditsLoaded = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstConfiguration = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(async (request, token) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/3/configuration")
+            {
+                if (Interlocked.Increment(ref configurationCalls) == 1)
+                {
+                    firstConfigurationStarted.TrySetResult();
+                    await releaseFirstConfiguration.Task.WaitAsync(token);
+                    return Json("{}", HttpStatusCode.ServiceUnavailable);
+                }
+                return Json("""
+                    {"images":{"secure_base_url":"https://image.tmdb.org/t/p/","poster_sizes":["w500"]}}
+                    """);
+            }
+            if (path.EndsWith("/credits", StringComparison.Ordinal))
+            {
+                if (path.Contains("/movie/2/", StringComparison.Ordinal))
+                    secondCreditsLoaded.TrySetResult();
+                return Json("""{"cast":[],"crew":[]}""");
+            }
+            var id = path.Contains("/movie/1", StringComparison.Ordinal) ? 1 : 2;
+            return MovieResponse(id, $"/{id}.jpg");
+        });
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var first = provider.GetDetailsAsync(
+            new("tmdb", "movie", "1", MediaType.Movie),
+            CancellationToken.None);
+        await firstConfigurationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var second = provider.GetDetailsAsync(
+            new("tmdb", "movie", "2", MediaType.Movie),
+            CancellationToken.None);
+        await secondCreditsLoaded.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseFirstConfiguration.TrySetResult();
+        var results = await Task.WhenAll(first, second);
+
+        Assert.IsTrue(results[0].PosterFailed);
+        Assert.AreEqual(
+            MetadataProviderFailureKind.Transient,
+            results[0].OptionalIssue?.Kind);
+        Assert.IsNotNull(results[1].PosterUri);
+        Assert.IsFalse(results[1].PosterFailed);
+        Assert.AreEqual(2, configurationCalls);
+    }
+
+    [TestMethod]
     public async Task GetDetailsAsync_WhenConfigurationLacksW500_OmitsPosterWithoutFailure()
     {
         var responses = new Queue<HttpResponseMessage>(
@@ -970,13 +1121,16 @@ public sealed class TmdbMetadataProviderTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            Requests.Add(new(
-                request.RequestUri!,
-                request.Headers.Authorization is { } authorization
-                    ? new(
-                        authorization.Scheme,
-                        authorization.Parameter)
-                    : null));
+            lock (Requests)
+            {
+                Requests.Add(new(
+                    request.RequestUri!,
+                    request.Headers.Authorization is { } authorization
+                        ? new(
+                            authorization.Scheme,
+                            authorization.Parameter)
+                        : null));
+            }
             return _respond(request, cancellationToken);
         }
     }

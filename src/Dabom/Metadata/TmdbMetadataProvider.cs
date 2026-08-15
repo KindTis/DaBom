@@ -42,6 +42,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
     private readonly Func<string?> _getAccessToken;
+    private readonly SemaphoreSlim _imageConfigurationGate = new(1, 1);
     private ImageConfiguration? _imageConfiguration;
 
     public TmdbMetadataProvider(
@@ -412,34 +413,49 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         string posterPath,
         CancellationToken cancellationToken)
     {
-        if (_imageConfiguration is null)
+        var configuration = _imageConfiguration;
+        if (configuration is null)
         {
-            var response = await SendJsonAsync<ConfigurationResponse>(
-                "configuration",
-                cancellationToken);
-            var images = response.Images
-                ?? throw InvalidResponse(
-                    "TMDB 이미지 설정 형식이 올바르지 않습니다.");
-            if (!Uri.TryCreate(
-                    images.SecureBaseUrl,
-                    UriKind.Absolute,
-                    out var secureBase)
-                || secureBase.Scheme != Uri.UriSchemeHttps
-                || images.PosterSizes is null)
+            await _imageConfigurationGate.WaitAsync(cancellationToken);
+            try
             {
-                throw InvalidResponse(
-                    "TMDB 이미지 설정 형식이 올바르지 않습니다.");
+                configuration = _imageConfiguration;
+                if (configuration is null)
+                {
+                    var response = await SendJsonAsync<ConfigurationResponse>(
+                        "configuration",
+                        cancellationToken);
+                    var images = response.Images
+                        ?? throw InvalidResponse(
+                            "TMDB 이미지 설정 형식이 올바르지 않습니다.");
+                    if (!Uri.TryCreate(
+                            images.SecureBaseUrl,
+                            UriKind.Absolute,
+                            out var secureBase)
+                        || secureBase.Scheme != Uri.UriSchemeHttps
+                        || images.PosterSizes is null)
+                    {
+                        throw InvalidResponse(
+                            "TMDB 이미지 설정 형식이 올바르지 않습니다.");
+                    }
+
+                    configuration = new(
+                        secureBase,
+                        images.PosterSizes.Contains(
+                            "w500",
+                            StringComparer.Ordinal));
+                    _imageConfiguration = configuration;
+                }
             }
-            _imageConfiguration = new(
-                secureBase,
-                images.PosterSizes.Contains(
-                    "w500",
-                    StringComparer.Ordinal));
+            finally
+            {
+                _imageConfigurationGate.Release();
+            }
         }
 
-        if (!_imageConfiguration.HasW500) return null;
+        if (!configuration.HasW500) return null;
         return new Uri(
-            _imageConfiguration.SecureBaseUrl,
+            configuration.SecureBaseUrl,
             $"w500/{posterPath.TrimStart('/')}");
     }
 
