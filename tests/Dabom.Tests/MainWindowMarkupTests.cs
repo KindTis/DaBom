@@ -862,6 +862,7 @@ public sealed class MainWindowMarkupTests
                 {
                     WindowName = "DabomSeasonScrollTest",
                     WindowStyle = 0,
+                    ExtendedWindowStyle = 0x08000000, // WS_EX_NOACTIVATE
                     Width = 800,
                     Height = 320,
                     PositionX = -32_000,
