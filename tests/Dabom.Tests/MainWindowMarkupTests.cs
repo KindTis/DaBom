@@ -1,6 +1,7 @@
 using Dabom.Library;
 using Dabom.Main;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -224,6 +225,10 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"정렬\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"영상 검색\"");
         StringAssert.Contains(markup, "AutomationProperties.Name=\"정렬\"");
+        StringAssert.Contains(markup, "<Button x:Name=\"SortDirectionButton\"");
+        StringAssert.Contains(markup, "Command=\"{Binding ToggleSortDirectionCommand}\"");
+        StringAssert.Contains(markup, "Value=\"정렬 방향: 오름차순\"");
+        StringAssert.Contains(markup, "Value=\"정렬 방향: 내림차순\"");
     }
 
     [TestMethod]
@@ -998,7 +1003,7 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
-    public void ToastStack_IsBottomRightNonInteractiveAndPolitelyAnnounced()
+    public void ToastStack_IsBottomRightAndPolitelyAnnounced()
     {
         var document = XDocument.Parse(ReadMainWindowMarkup());
         XNamespace presentation =
@@ -1023,10 +1028,94 @@ public sealed class MainWindowMarkupTests
         Assert.AreEqual("Bottom", (string?)host.Attribute("VerticalAlignment"));
         Assert.AreEqual("360", (string?)host.Attribute("Width"));
         Assert.AreEqual("0,0,32,110", (string?)host.Attribute("Margin"));
-        Assert.AreEqual("False", (string?)host.Attribute("IsHitTestVisible"));
+        Assert.AreEqual("True", (string?)host.Attribute("IsHitTestVisible"));
         Assert.AreEqual("False", (string?)announcement.Attribute("IsHitTestVisible"));
         Assert.AreEqual("Polite", liveSetting.Value);
-        Assert.IsFalse(host.Descendants().Any(), "토스트 호스트에 포커스 가능한 XAML 컨트롤을 두지 않습니다.");
+        Assert.IsFalse(host.Descendants().Any(), "토스트 항목은 런타임에서 추가합니다.");
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void VideoToast_ShowsPosterTitleResultAndFilenameAsClickableCard()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-video-toast-");
+        EnsureApplicationResources();
+        var window = new MainWindow();
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            var video = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Movie.File.mkv"),
+                new VideoRecord { Title = "Movie" },
+                store);
+            var viewModel = new MainViewModel(
+                store,
+                new EmptyScanner(),
+                new LibraryData(),
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                _ => 0);
+            viewModel.Videos.Add(video);
+            window.DataContext = viewModel;
+            var request = new ToastRequest(
+                "“Movie”이 추가되었습니다.",
+                "추가됨",
+                video);
+            var handler = typeof(MainWindow).GetMethod(
+                "OnToastRequested",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+            handler.Invoke(window, [null, request]);
+
+            var host = (StackPanel)window.FindName("ToastHost");
+            var button = host.Children.OfType<Button>().Single();
+            Assert.AreSame(window.FindResource("RaisedBrush"), button.Background);
+            Assert.AreSame(window.FindResource("AccentBrush"), button.BorderBrush);
+            Assert.IsTrue(button.IsHitTestVisible);
+            Assert.AreEqual(
+                "“Movie”이 추가되었습니다. 목록에서 보기",
+                AutomationProperties.GetName(button));
+            var content = (Grid)button.Content;
+            var poster = content.Children.OfType<Border>().Single();
+            Assert.AreEqual(40, poster.Width);
+            Assert.AreEqual(60, poster.Height);
+            Assert.AreSame(window.FindResource("SurfaceBrush"), poster.Background);
+            Assert.IsInstanceOfType<Border>(poster.Child);
+            var lines = content.Children.OfType<StackPanel>().Single();
+            var title = (TextBlock)lines.Children[0];
+            var details = (Grid)lines.Children[1];
+            Assert.AreEqual(0, details.Children.OfType<Border>().Count());
+            var detailTexts = details.Children.OfType<TextBlock>().ToArray();
+            var result = detailTexts.Single(text => text.Text == "추가됨");
+            var separator = detailTexts.Single(text => text.Text == "·");
+            var fileName = detailTexts.Single(text => text.Text == "Movie.File.mkv");
+            Assert.AreEqual("Movie", title.Text);
+            Assert.AreSame(window.FindResource("ToastSuccessBrush"), result.Foreground);
+            Assert.AreEqual(FontWeights.SemiBold, result.FontWeight);
+            Assert.AreSame(window.FindResource("MutedBrush"), separator.Foreground);
+            Assert.AreSame(window.FindResource("MutedBrush"), fileName.Foreground);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, title.TextTrimming);
+            Assert.AreEqual(TextTrimming.CharacterEllipsis, fileName.TextTrimming);
+
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            Assert.AreSame(video, viewModel.SelectedVideo);
+            Assert.AreEqual(0, host.Children.Count);
+        }
+        finally
+        {
+            window.Close();
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void ToastStatusBrushKey_DistinguishesSuccessWarningAndErrors()
+    {
+        Assert.AreEqual("ToastSuccessBrush", MainWindow.GetToastStatusBrushKey("추가됨"));
+        Assert.AreEqual("ToastWarningBrush", MainWindow.GetToastStatusBrushKey("파일 상태 변경"));
+        Assert.AreEqual("ToastErrorBrush", MainWindow.GetToastStatusBrushKey("파일 없음"));
+        Assert.AreEqual("ToastErrorBrush", MainWindow.GetToastStatusBrushKey("저장 실패"));
     }
 
     [TestMethod]
@@ -1056,13 +1145,9 @@ public sealed class MainWindowMarkupTests
     public void ToastLifecycle_UsesAnimationSettingAndLiveRegionWithoutFocusChanges()
     {
         var code = ReadMainWindowCode();
-        StringAssert.Contains(code, "private Border CreateToastVisual");
+        StringAssert.Contains(code, "private FrameworkElement CreateToastVisual");
         StringAssert.Contains(code, "private void AnnounceToast");
         StringAssert.Contains(code, "protected override void OnClosed");
-        var visual = MethodBody(
-            code,
-            "private Border CreateToastVisual",
-            "private void AnnounceToast");
         var announce = MethodBody(
             code,
             "private void AnnounceToast",
@@ -1075,8 +1160,6 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(code, "_pendingToasts.Clear()");
         StringAssert.Contains(code, "_toastElements.Clear()");
         StringAssert.Contains(code, "ToastHost.Children.Clear()");
-        StringAssert.Contains(visual, "IsHitTestVisible = false");
-        Assert.IsFalse(visual.Contains("Button", StringComparison.Ordinal));
         Assert.IsFalse(announce.Contains("Focus(", StringComparison.Ordinal));
     }
 
@@ -1267,7 +1350,21 @@ public sealed class MainWindowMarkupTests
 
         StringAssert.Contains(template[posterStart..posterEnd], "Opacity=\"{Binding PosterOpacity}\"");
         StringAssert.Contains(template[ribbonStart..], "Background=\"#FFD63C3C\"");
+        StringAssert.Contains(template[ribbonStart..], "Margin=\"1,0,1,1\"");
+        StringAssert.Contains(template[ribbonStart..], "CornerRadius=\"0,0,15,15\"");
         Assert.IsFalse(template[posterStart..posterEnd].Contains("#FFD63C3C", StringComparison.Ordinal));
+    }
+
+    private sealed class EmptyScanner : ILibraryScanner
+    {
+        public Task<ScanResult> ScanAsync(
+            IReadOnlyList<string> locations,
+            IReadOnlyDictionary<string, VideoRecord> existingFileCache,
+            IProgress<int>? progress,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ScanResult(
+                new Dictionary<string, ScannedVideo>(StringComparer.OrdinalIgnoreCase),
+                []));
     }
 
     private static string ProjectDirectory() => Path.GetFullPath(Path.Combine(

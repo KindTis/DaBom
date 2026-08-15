@@ -10,6 +10,9 @@
     <SolidColorBrush x:Key="AccentBrush" Color="#CBC9C2" />
     <SolidColorBrush x:Key="LineBrush" Color="#24E7E5DF" />
     <SolidColorBrush x:Key="CloseHoverBrush" Color="#FF8B1E2D" />
+    <SolidColorBrush x:Key="ToastSuccessBrush" Color="#72C990" />
+    <SolidColorBrush x:Key="ToastWarningBrush" Color="#E2B65B" />
+    <SolidColorBrush x:Key="ToastErrorBrush" Color="#E58A94" />
     <CornerRadius x:Key="ControlCornerRadius">12</CornerRadius>
     <CornerRadius x:Key="SurfaceCornerRadius">16</CornerRadius>
     <CornerRadius x:Key="HeroCornerRadius">28</CornerRadius>
