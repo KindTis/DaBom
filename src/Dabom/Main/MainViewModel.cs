@@ -39,6 +39,34 @@ internal sealed record VideoDeletionRequest(
     VideoFileStatus Status,
     FileIdentity? Identity);
 
+internal enum VideoDeletionFailureKind
+{
+    FileStatus,
+    RecycleBin,
+    ListRemoval,
+    RecycledListRemoval
+}
+
+internal sealed record VideoDeletionFailure(
+    VideoItemViewModel Video,
+    VideoDeletionFailureKind Kind,
+    string Message);
+
+internal sealed record VideoDeletionPreparation(
+    IReadOnlyList<VideoDeletionRequest> Requests,
+    IReadOnlyList<VideoDeletionFailure> Failures)
+{
+    internal int VideoCount => Requests.Count + Failures.Count;
+}
+
+internal sealed record VideoDeletionResult(
+    int DeletedCount,
+    IReadOnlyList<VideoDeletionFailure> Failures)
+{
+    internal IReadOnlyList<VideoItemViewModel> FailedVideos =>
+        Failures.Select(failure => failure.Video).ToArray();
+}
+
 public sealed record ToastRequest(
     string Message,
     string? Result,
@@ -314,6 +342,47 @@ public sealed class MainViewModel : ViewModelBase
     internal void RequestSeasonDeletionGuidance() =>
         RequestToast(
             "TV 시즌은 한 번에 삭제할 수 없습니다. 시즌을 열고 개별 영상을 선택하세요.");
+
+    private void RequestDeletionSummary(
+        int deletedCount,
+        IReadOnlyList<VideoDeletionFailure> failures,
+        int videoCount)
+    {
+        var lines = new List<string>
+        {
+            $"삭제 {deletedCount}개, 실패 {failures.Count}개"
+        };
+        foreach (var kind in Enum.GetValues<VideoDeletionFailureKind>())
+        {
+            var count = failures.Count(failure => failure.Kind == kind);
+            if (count > 0) lines.Add($"{FailureLabel(kind)} {count}개");
+        }
+        if (videoCount == 1 && failures.Count == 1)
+        {
+            lines.Add(failures[0].Message);
+        }
+
+        var message = string.Join(Environment.NewLine, lines);
+        if (videoCount == 1 && failures.Count == 1)
+        {
+            RequestToast(
+                message,
+                FailureLabel(failures[0].Kind),
+                failures[0].Video);
+        }
+        else
+        {
+            RequestToast(message);
+        }
+    }
+
+    private static string FailureLabel(VideoDeletionFailureKind kind) => kind switch
+    {
+        VideoDeletionFailureKind.FileStatus => "파일 상태 확인 실패",
+        VideoDeletionFailureKind.RecycleBin => "휴지통 이동 실패",
+        VideoDeletionFailureKind.ListRemoval => "목록 제거 실패",
+        _ => "파일 이동됨 · 목록 제거 실패"
+    };
 
     public bool OpenSeason(SeasonItemViewModel season)
     {
@@ -761,24 +830,51 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
-    internal VideoDeletionRequest? PrepareVideoDeletion()
+    internal VideoDeletionPreparation? PrepareVideoDeletions(
+        IReadOnlyList<LibraryItemViewModel> selectedItems)
     {
-        if (!CanMutateLibrary || SelectedVideo is null) return null;
-
-        var video = SelectedVideo;
-        var current = _probeFile(video.Path);
-        if (current.Status is not (VideoFileStatus.Present or VideoFileStatus.Missing)
-            || current.Status == VideoFileStatus.Present && current.Identity is null)
+        if (selectedItems.Any(item => item is SeasonItemViewModel))
         {
-            RequestToast(
-                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
-                "파일 상태 변경",
-                video);
+            RequestSeasonDeletionGuidance();
+        }
+
+        var videos = selectedItems.OfType<VideoItemViewModel>().ToArray();
+        if (videos.Length == 0 || !CanMutateLibrary) return null;
+
+        var requests = new List<VideoDeletionRequest>(videos.Length);
+        var failures = new List<VideoDeletionFailure>();
+        foreach (var video in videos)
+        {
+            var current = _probeFile(video.Path);
+            if (current.Status is not (VideoFileStatus.Present or VideoFileStatus.Missing)
+                || current.Status == VideoFileStatus.Present && current.Identity is null)
+            {
+                failures.Add(FileStatusFailure(video));
+                continue;
+            }
+
+            requests.Add(new(video, current.Status, current.Identity));
+        }
+
+        if (requests.Count == 0)
+        {
+            RequestDeletionSummary(0, failures, videos.Length);
             return null;
         }
 
-        return new(video, current.Status, current.Identity);
+        return new(requests, failures);
     }
+
+    private static VideoDeletionFailure FileStatusFailure(
+        VideoItemViewModel video) => new(
+        video,
+        VideoDeletionFailureKind.FileStatus,
+        $"“{video.FileName}”: 파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
+
+    internal VideoDeletionRequest? PrepareVideoDeletion() =>
+        SelectedVideo is null
+            ? null
+            : PrepareVideoDeletions([SelectedVideo])?.Requests.SingleOrDefault();
 
     internal async Task<bool> DeleteVideoAsync(VideoDeletionRequest request)
     {

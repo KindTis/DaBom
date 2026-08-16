@@ -3618,6 +3618,75 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void PrepareVideoDeletions_PreservesVideoOrderAndExcludesSeasonAndUnsafeItem()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-delete-prepare-many-");
+        try
+        {
+            var presentPath = Path.Combine(root.FullName, "Present.mkv");
+            var missingPath = Path.Combine(root.FullName, "Missing.mkv");
+            var unsafePath = Path.Combine(root.FullName, "Unsafe.mkv");
+            var store = new LibraryStore(root.FullName);
+            var data = CachedData(root.FullName, presentPath, missingPath, unsafePath);
+            var identity = new FileIdentity(7, 10, 20);
+            var probes = new Dictionary<string, FileProbeResult>(StringComparer.OrdinalIgnoreCase)
+            {
+                [presentPath] = new(VideoFileStatus.Present, identity),
+                [missingPath] = new(VideoFileStatus.Missing, null),
+                [unsafePath] = new(VideoFileStatus.Unavailable, null)
+            };
+            var viewModel = new MainViewModel(
+                store,
+                new StubScanner(),
+                data,
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                _ => 0,
+                null,
+                path => probes[path],
+                _ => Assert.Fail());
+            foreach (var path in new[] { presentPath, missingPath, unsafePath })
+            {
+                viewModel.Videos.Add(new VideoItemViewModel(
+                    path,
+                    data.VideosByPath[path],
+                    store));
+            }
+            var episode = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Episode.mkv"),
+                TvRecord("에피소드", "시리즈", 1, 1),
+                store);
+            var season = new SeasonItemViewModel(
+                SeasonGroupKey.From(episode.Record)!,
+                [episode],
+                [episode]);
+            var toasts = new List<ToastRequest>();
+            viewModel.ToastRequested += (_, toast) => toasts.Add(toast);
+
+            var preparation = viewModel.PrepareVideoDeletions(
+                [viewModel.Videos[0], season, viewModel.Videos[1], viewModel.Videos[2]]);
+
+            Assert.IsNotNull(preparation);
+            CollectionAssert.AreEqual(
+                new[] { presentPath, missingPath },
+                preparation.Requests.Select(request => request.Video.Path).ToArray());
+            CollectionAssert.AreEqual(
+                new[] { VideoFileStatus.Present, VideoFileStatus.Missing },
+                preparation.Requests.Select(request => request.Status).ToArray());
+            Assert.AreEqual(1, preparation.Failures.Count);
+            Assert.AreSame(viewModel.Videos[2], preparation.Failures[0].Video);
+            Assert.AreEqual(VideoDeletionFailureKind.FileStatus, preparation.Failures[0].Kind);
+            Assert.AreEqual(3, preparation.VideoCount);
+            Assert.AreEqual(1, toasts.Count);
+            StringAssert.Contains(toasts[0].Message, "TV 시즌은 한 번에 삭제할 수 없습니다");
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void DeleteVideo_PresentSameIdentity_RecyclesSavesAndRemovesFromScreenInOrder()
     {
         RunOnDispatcher(async () =>
@@ -3774,7 +3843,8 @@ public sealed class MainViewModelTests
                 _ => Assert.Fail());
             Assert.AreEqual(VideoFileStatus.Present, vm.SelectedVideo!.FileStatus);
 
-            var request = vm.PrepareVideoDeletion();
+            var request = vm.PrepareVideoDeletions([vm.SelectedVideo!])!
+                .Requests.Single();
 
             Assert.IsNotNull(request);
             Assert.AreSame(vm.SelectedVideo, request.Video);
@@ -3805,7 +3875,8 @@ public sealed class MainViewModelTests
                 _ => Assert.Fail());
             Assert.AreEqual(VideoFileStatus.Missing, vm.SelectedVideo!.FileStatus);
 
-            var request = vm.PrepareVideoDeletion();
+            var request = vm.PrepareVideoDeletions([vm.SelectedVideo!])!
+                .Requests.Single();
 
             Assert.IsNotNull(request);
             Assert.AreEqual(VideoFileStatus.Present, request.Status);
@@ -3895,13 +3966,16 @@ public sealed class MainViewModelTests
             string? toast = null;
             vm.ToastRequested += (_, message) => toast = message.Message;
 
-            var request = vm.PrepareVideoDeletion();
+            var preparation = vm.PrepareVideoDeletions([vm.SelectedVideo!]);
 
-            Assert.IsNull(request);
+            Assert.IsNull(preparation);
             CollectionAssert.AreEqual(new[] { "probe" }, calls);
-            Assert.AreEqual(
-                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
-                toast);
+            StringAssert.Contains(toast, "삭제 0개, 실패 1개");
+            StringAssert.Contains(toast, "파일 상태 확인 실패 1개");
+            StringAssert.Contains(toast, "Movie.mkv");
+            StringAssert.Contains(
+                toast,
+                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
         }
         finally
         {
