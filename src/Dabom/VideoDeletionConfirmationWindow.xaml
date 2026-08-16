@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="영상 삭제"
         Icon="Assets/Dabom.ico"
-        Width="520"
+        Width="620"
         SizeToContent="Height"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
@@ -24,23 +24,66 @@
                    FontSize="22"
                    FontWeight="SemiBold" />
 
-        <Border Grid.Row="1"
-                Margin="0,18,0,0"
-                Padding="16,12"
-                Background="{StaticResource RaisedBrush}"
-                CornerRadius="{StaticResource ControlCornerRadius}">
-            <TextBlock x:Name="FileNameText"
-                       TextTrimming="CharacterEllipsis" />
-        </Border>
-
-        <TextBlock x:Name="DescriptionText"
-                   Grid.Row="2"
-                   Margin="0,16,0,0"
+        <TextBlock x:Name="ExclusionText"
+                   Grid.Row="1"
+                   Margin="0,14,0,0"
                    Foreground="{StaticResource MutedBrush}"
-                   TextWrapping="Wrap" />
+                   TextWrapping="Wrap"
+                   Visibility="Collapsed" />
+
+        <ScrollViewer Grid.Row="2"
+                      Margin="0,18,0,0"
+                      MaxHeight="320"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="DeletionItems">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,0,0,8"
+                                Padding="16,12"
+                                Background="{StaticResource RaisedBrush}"
+                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                AutomationProperties.Name="{Binding AutomationName}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                    <TextBlock Text="{Binding FileName}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding FolderHint}"
+                                               Margin="0,4,0,0"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding FolderHint}"
+                                                                 Value="{x:Null}">
+                                                        <Setter Property="Visibility"
+                                                                Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource MutedBrush}"
+                                           Text="{Binding ActionText}"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="230" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
 
         <StackPanel Grid.Row="3"
-                    Margin="0,28,0,0"
+                    Margin="0,20,0,0"
                     HorizontalAlignment="Right"
                     Orientation="Horizontal">
             <Button x:Name="CancelButton"
@@ -52,6 +95,8 @@
                     AutomationProperties.Name="영상 삭제 취소" />
             <Button x:Name="ConfirmButton"
                     MinWidth="140"
+                    Content="선택 항목 삭제"
+                    AutomationProperties.Name="선택 항목 삭제"
                     Click="OnConfirm">
                 <Button.Style>
                     <Style TargetType="Button"

@@ -560,9 +560,7 @@ public partial class MainWindow : Window
 
             var request = viewModel.PrepareVideoDeletion();
             if (request is null) return;
-            var confirmation = new VideoDeletionConfirmationWindow(
-                request.Video.FileName,
-                request.Status)
+            var confirmation = new VideoDeletionConfirmationWindow([request], 0)
             {
                 Owner = this
             };
