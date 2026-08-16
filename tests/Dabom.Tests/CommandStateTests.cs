@@ -205,9 +205,10 @@ public sealed class CommandStateTests
                     _ => { });
                 await vm.ScanAsync();
                 vm.SelectedVideo = vm.Videos.Single();
-                var request = vm.PrepareVideoDeletion();
+                var preparation = vm.PrepareVideoDeletions([vm.SelectedVideo!]);
+                Assert.IsNotNull(preparation);
 
-                var deletion = vm.DeleteVideoAsync(request!);
+                var deletion = vm.DeleteVideosAsync(preparation);
                 await started.Task;
 
                 Assert.IsTrue(vm.IsDeleting);
@@ -215,7 +216,9 @@ public sealed class CommandStateTests
                 AssertCommandsDisabled(vm, root.FullName);
 
                 release.TrySetResult();
-                Assert.IsTrue(await deletion);
+                var result = await deletion;
+                Assert.AreEqual(1, result.DeletedCount);
+                Assert.AreEqual(0, result.Failures.Count);
                 Assert.IsFalse(vm.IsDeleting);
                 Assert.IsTrue(vm.CanMutateLibrary);
                 Assert.IsTrue(vm.RescanCommand.CanExecute(null));

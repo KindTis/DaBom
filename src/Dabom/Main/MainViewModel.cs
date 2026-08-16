@@ -876,74 +876,106 @@ public sealed class MainViewModel : ViewModelBase
             ? null
             : PrepareVideoDeletions([SelectedVideo])?.Requests.SingleOrDefault();
 
-    internal async Task<bool> DeleteVideoAsync(VideoDeletionRequest request)
+    internal async Task<VideoDeletionResult> DeleteVideosAsync(
+        VideoDeletionPreparation preparation)
     {
-        if (!CanMutateLibrary || !Videos.Contains(request.Video)) return false;
+        if (!CanMutateLibrary)
+        {
+            var blocked = preparation.Failures
+                .Concat(preparation.Requests.Select(request =>
+                    FileStatusFailure(request.Video)))
+                .ToArray();
+            RequestDeletionSummary(0, blocked, preparation.VideoCount);
+            return new(0, blocked);
+        }
 
+        var failures = new List<VideoDeletionFailure>(preparation.Failures);
+        var deletedCount = 0;
         IsDeleting = true;
         try
         {
-            var current = _probeFile(request.Video.Path);
-            if (!SameDeletionTarget(request, current))
+            foreach (var request in preparation.Requests)
             {
-                RequestToast(
-                    "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
-                    "파일 상태 변경",
-                    request.Video);
-                return false;
-            }
-
-            var next = RemoveRecord(request.Video.Path);
-            var moved = false;
-            if (current.Status == VideoFileStatus.Present)
-            {
-                try
+                var failure = await DeletePreparedVideoAsync(request);
+                if (failure is null)
                 {
-                    _moveToRecycleBin(request.Video.Path);
-                    moved = true;
-                }
-                catch
-                {
-                    RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}”을 휴지통으로 이동하지 못했습니다.",
-                        "휴지통 이동 실패",
-                        request.Video);
-                    return false;
-                }
-            }
-
-            try
-            {
-                await _store.SaveAsync(next);
-            }
-            catch
-            {
-                if (moved)
-                {
-                    request.Video.FileStatus = VideoFileStatus.Missing;
-                    RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.",
-                        "목록 제거 실패 · 파일 이동됨",
-                        request.Video);
+                    deletedCount++;
                 }
                 else
                 {
-                    RequestToast(
-                        $"“{Path.GetFileName(request.Video.Path)}”을 영상 목록에서 제거하지 못했습니다.",
-                        "목록 제거 실패",
-                        request.Video);
+                    failures.Add(failure);
                 }
-                return false;
             }
-
-            _data = next;
-            RemoveVideoFromScreen(request.Video);
-            return true;
         }
         finally
         {
             IsDeleting = false;
         }
+
+        var result = new VideoDeletionResult(deletedCount, failures);
+        RequestDeletionSummary(deletedCount, failures, preparation.VideoCount);
+        return result;
+    }
+
+    private async Task<VideoDeletionFailure?> DeletePreparedVideoAsync(
+        VideoDeletionRequest request)
+    {
+        if (!Videos.Contains(request.Video)) return FileStatusFailure(request.Video);
+
+        var current = _probeFile(request.Video.Path);
+        if (!SameDeletionTarget(request, current))
+        {
+            return FileStatusFailure(request.Video);
+        }
+
+        var next = RemoveRecord(request.Video.Path);
+        var moved = false;
+        if (current.Status == VideoFileStatus.Present)
+        {
+            try
+            {
+                _moveToRecycleBin(request.Video.Path);
+                moved = true;
+            }
+            catch
+            {
+                return new(
+                    request.Video,
+                    VideoDeletionFailureKind.RecycleBin,
+                    $"“{request.Video.FileName}”을 휴지통으로 이동하지 못했습니다.");
+            }
+        }
+
+        try
+        {
+            await _store.SaveAsync(next);
+        }
+        catch
+        {
+            if (moved)
+            {
+                request.Video.FileStatus = VideoFileStatus.Missing;
+                return new(
+                    request.Video,
+                    VideoDeletionFailureKind.RecycledListRemoval,
+                    $"“{request.Video.FileName}” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.");
+            }
+
+            return new(
+                request.Video,
+                VideoDeletionFailureKind.ListRemoval,
+                $"“{request.Video.FileName}”을 영상 목록에서 제거하지 못했습니다.");
+        }
+
+        _data = next;
+        RemoveVideoFromScreen(request.Video);
+        return null;
+    }
+
+    internal async Task<bool> DeleteVideoAsync(VideoDeletionRequest request)
+    {
+        var result = await DeleteVideosAsync(new([request], []));
+        return result.DeletedCount == 1;
     }
 
     public async Task PlayAsync(VideoItemViewModel video)

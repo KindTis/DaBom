@@ -3687,6 +3687,138 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void DeleteVideos_ContinuesAfterEveryFailureAndReportsOneSummary()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-delete-many-failures-");
+            try
+            {
+            var preparationFailurePath = Path.Combine(root.FullName, "Prepare.mkv");
+            var changedPath = Path.Combine(root.FullName, "Changed.mkv");
+            var recycleFailurePath = Path.Combine(root.FullName, "Recycle.mkv");
+            var listFailurePath = Path.Combine(root.FullName, "List.mkv");
+            var movedListFailurePath = Path.Combine(root.FullName, "Moved.mkv");
+            var successPath = Path.Combine(root.FullName, "Success.mkv");
+            var paths = new[]
+            {
+                preparationFailurePath,
+                changedPath,
+                recycleFailurePath,
+                listFailurePath,
+                movedListFailurePath,
+                successPath
+            };
+            var data = CachedData(root.FullName, paths);
+            var firstIdentity = new FileIdentity(7, 10, 20);
+            var secondIdentity = new FileIdentity(7, 11, 20);
+            var thirdIdentity = new FileIdentity(7, 12, 20);
+            var probes = new Dictionary<string, Queue<FileProbeResult>>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                [preparationFailurePath] = new([
+                    new(VideoFileStatus.Unknown, null)]),
+                [changedPath] = new([
+                    new(VideoFileStatus.Present, firstIdentity),
+                    new(VideoFileStatus.Missing, null)]),
+                [recycleFailurePath] = new([
+                    new(VideoFileStatus.Present, secondIdentity),
+                    new(VideoFileStatus.Present, secondIdentity)]),
+                [listFailurePath] = new([
+                    new(VideoFileStatus.Missing, null),
+                    new(VideoFileStatus.Missing, null)]),
+                [movedListFailurePath] = new([
+                    new(VideoFileStatus.Present, thirdIdentity),
+                    new(VideoFileStatus.Present, thirdIdentity)]),
+                [successPath] = new([
+                    new(VideoFileStatus.Missing, null),
+                    new(VideoFileStatus.Missing, null)])
+            };
+            var saveCalls = 0;
+            var store = new LibraryStore(root.FullName, (temporary, destination, _) =>
+            {
+                saveCalls++;
+                if (saveCalls <= 2) throw new IOException("disk full");
+                File.Move(temporary, destination, true);
+                return Task.CompletedTask;
+            });
+            var recycled = new List<string>();
+            var viewModel = new MainViewModel(
+                store,
+                new StubScanner(),
+                data,
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                _ => 0,
+                null,
+                path => probes[path].Dequeue(),
+                path =>
+                {
+                    if (path == recycleFailurePath) throw new IOException("recycle failed");
+                    recycled.Add(path);
+                });
+            foreach (var path in paths)
+            {
+                viewModel.Videos.Add(new VideoItemViewModel(
+                    path,
+                    data.VideosByPath[path],
+                    store));
+            }
+            var toasts = new List<ToastRequest>();
+            viewModel.ToastRequested += (_, toast) => toasts.Add(toast);
+            var preparation = viewModel.PrepareVideoDeletions(
+                viewModel.Videos.Cast<LibraryItemViewModel>().ToArray());
+
+            Assert.IsNotNull(preparation);
+            Assert.AreEqual(1, preparation.Failures.Count);
+            Assert.AreEqual(0, toasts.Count);
+
+            var result = await viewModel.DeleteVideosAsync(preparation);
+
+            Assert.AreEqual(1, result.DeletedCount);
+            Assert.AreEqual(5, result.Failures.Count);
+            Assert.AreEqual(
+                2,
+                result.Failures.Count(failure =>
+                    failure.Kind == VideoDeletionFailureKind.FileStatus));
+            Assert.AreEqual(
+                1,
+                result.Failures.Count(failure =>
+                    failure.Kind == VideoDeletionFailureKind.RecycleBin));
+            Assert.AreEqual(
+                1,
+                result.Failures.Count(failure =>
+                    failure.Kind == VideoDeletionFailureKind.ListRemoval));
+            Assert.AreEqual(
+                1,
+                result.Failures.Count(failure =>
+                    failure.Kind == VideoDeletionFailureKind.RecycledListRemoval));
+            CollectionAssert.AreEqual(
+                paths[..^1],
+                result.FailedVideos.Select(video => video.Path).ToArray());
+            Assert.AreEqual(5, viewModel.Videos.Count);
+            Assert.IsFalse(viewModel.Videos.Any(video => video.Path == successPath));
+            Assert.AreEqual(
+                VideoFileStatus.Missing,
+                viewModel.Videos.Single(video =>
+                    video.Path == movedListFailurePath).FileStatus);
+            CollectionAssert.AreEqual(new[] { movedListFailurePath }, recycled);
+            Assert.AreEqual(3, saveCalls);
+            Assert.AreEqual(1, toasts.Count);
+            StringAssert.Contains(toasts[0].Message, "삭제 1개, 실패 5개");
+            StringAssert.Contains(toasts[0].Message, "파일 상태 확인 실패 2개");
+            StringAssert.Contains(toasts[0].Message, "휴지통 이동 실패 1개");
+            StringAssert.Contains(toasts[0].Message, "목록 제거 실패 1개");
+            StringAssert.Contains(toasts[0].Message, "파일 이동됨 · 목록 제거 실패 1개");
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
+    [TestMethod]
     public void DeleteVideo_PresentSameIdentity_RecyclesSavesAndRemovesFromScreenInOrder()
     {
         RunOnDispatcher(async () =>
@@ -3720,10 +3852,10 @@ public sealed class MainViewModelTests
                     });
                 var video = vm.SelectedVideo!;
 
-                var request = vm.PrepareVideoDeletion();
-                var deleted = await vm.DeleteVideoAsync(request!);
+                var result = await DeleteSelectedVideoAsync(vm);
 
-                Assert.IsTrue(deleted);
+                Assert.AreEqual(1, result.DeletedCount);
+                Assert.AreEqual(0, result.Failures.Count);
                 CollectionAssert.AreEqual(
                     new[] { "probe", "probe", "recycle", "save" },
                     calls);
@@ -3768,11 +3900,15 @@ public sealed class MainViewModelTests
                     data,
                     probe,
                     _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
+                var toasts = new List<ToastRequest>();
+                vm.ToastRequested += (_, toast) => toasts.Add(toast);
 
-                var request = vm.PrepareVideoDeletion();
-                var deleted = await vm.DeleteVideoAsync(request!);
+                var result = await DeleteSelectedVideoAsync(vm);
 
-                Assert.IsTrue(deleted);
+                Assert.AreEqual(1, result.DeletedCount);
+                Assert.AreEqual(0, result.Failures.Count);
+                Assert.AreEqual(1, toasts.Count);
+                Assert.AreEqual("삭제 1개, 실패 0개", toasts[0].Message);
                 CollectionAssert.AreEqual(new[] { "probe", "probe", "save" }, calls);
                 Assert.AreEqual(0, vm.Videos.Count);
                 var saved = await new LibraryStore(root.FullName)
@@ -3814,9 +3950,10 @@ public sealed class MainViewModelTests
                 var featured = vm.FeaturedVideo;
                 vm.SelectedVideo = vm.Videos[2];
 
-                var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+                var result = await DeleteSelectedVideoAsync(vm);
 
-                Assert.IsTrue(deleted);
+                Assert.AreEqual(1, result.DeletedCount);
+                Assert.AreEqual(0, result.Failures.Count);
                 Assert.AreSame(featured, vm.FeaturedVideo);
                 Assert.AreEqual(1, pickerCalls);
             }
@@ -3929,15 +4066,19 @@ public sealed class MainViewModelTests
             string? toast = null;
             vm.ToastRequested += (_, message) => toast = message.Message;
 
-            var request = vm.PrepareVideoDeletion();
-            var deleted = await vm.DeleteVideoAsync(request!);
+            var result = await DeleteSelectedVideoAsync(vm);
 
-            Assert.IsFalse(deleted);
+            Assert.AreEqual(0, result.DeletedCount);
+            Assert.AreEqual(
+                VideoDeletionFailureKind.FileStatus,
+                result.Failures.Single().Kind);
             CollectionAssert.AreEqual(new[] { "probe", "probe" }, calls);
             Assert.AreEqual(1, vm.Videos.Count);
-            Assert.AreEqual(
-                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.",
-                toast);
+            StringAssert.Contains(toast, "삭제 0개, 실패 1개");
+            StringAssert.Contains(toast, "파일 상태 확인 실패 1개");
+            StringAssert.Contains(
+                toast,
+                "파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
         }
         finally
         {
@@ -4015,14 +4156,19 @@ public sealed class MainViewModelTests
             string? toast = null;
             vm.ToastRequested += (_, message) => toast = message.Message;
 
-            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+            var result = await DeleteSelectedVideoAsync(vm);
 
-            Assert.IsFalse(deleted);
+            Assert.AreEqual(0, result.DeletedCount);
+            Assert.AreEqual(
+                VideoDeletionFailureKind.RecycleBin,
+                result.Failures.Single().Kind);
             CollectionAssert.AreEqual(new[] { "probe", "probe", "recycle" }, calls);
             Assert.AreEqual(1, vm.Videos.Count);
             var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
             Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
-            Assert.AreEqual("“Movie.mkv”을 휴지통으로 이동하지 못했습니다.", toast);
+            StringAssert.Contains(toast, "삭제 0개, 실패 1개");
+            StringAssert.Contains(toast, "휴지통 이동 실패 1개");
+            StringAssert.Contains(toast, "“Movie.mkv”을 휴지통으로 이동하지 못했습니다.");
         }
         finally
         {
@@ -4058,9 +4204,12 @@ public sealed class MainViewModelTests
             string? toast = null;
             vm.ToastRequested += (_, message) => toast = message.Message;
 
-            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+            var result = await DeleteSelectedVideoAsync(vm);
 
-            Assert.IsFalse(deleted);
+            Assert.AreEqual(0, result.DeletedCount);
+            Assert.AreEqual(
+                VideoDeletionFailureKind.RecycledListRemoval,
+                result.Failures.Single().Kind);
             CollectionAssert.AreEqual(
                 new[] { "probe", "probe", "recycle", "save" },
                 calls);
@@ -4068,9 +4217,11 @@ public sealed class MainViewModelTests
             Assert.AreEqual(VideoFileStatus.Missing, vm.Videos.Single().FileStatus);
             var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
             Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
-            Assert.AreEqual(
-                "“Movie.mkv” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.",
-                toast);
+            StringAssert.Contains(toast, "삭제 0개, 실패 1개");
+            StringAssert.Contains(toast, "파일 이동됨 · 목록 제거 실패 1개");
+            StringAssert.Contains(
+                toast,
+                "“Movie.mkv” 파일은 이동했지만 영상 목록에서 제거하지 못했습니다.");
         }
         finally
         {
@@ -4105,23 +4256,35 @@ public sealed class MainViewModelTests
             string? toast = null;
             vm.ToastRequested += (_, message) => toast = message.Message;
 
-            var deleted = await vm.DeleteVideoAsync(vm.PrepareVideoDeletion()!);
+            var result = await DeleteSelectedVideoAsync(vm);
 
-            Assert.IsFalse(deleted);
+            Assert.AreEqual(0, result.DeletedCount);
+            Assert.AreEqual(
+                VideoDeletionFailureKind.ListRemoval,
+                result.Failures.Single().Kind);
             CollectionAssert.AreEqual(new[] { "probe", "probe", "save" }, calls);
             Assert.AreEqual(1, vm.Videos.Count);
             Assert.AreEqual(VideoFileStatus.Present, vm.Videos.Single().FileStatus);
             var saved = await new LibraryStore(root.FullName).LoadAsync(CancellationToken.None);
             Assert.IsTrue(saved.VideosByPath.ContainsKey(path));
-            Assert.AreEqual(
-                "“Movie.mkv”을 영상 목록에서 제거하지 못했습니다.",
-                toast);
+            StringAssert.Contains(toast, "삭제 0개, 실패 1개");
+            StringAssert.Contains(toast, "목록 제거 실패 1개");
+            StringAssert.Contains(
+                toast,
+                "“Movie.mkv”을 영상 목록에서 제거하지 못했습니다.");
         }
         finally
         {
             root.Delete(true);
         }
     }
+
+    private static VideoDeletionPreparation PrepareSelectedVideo(MainViewModel viewModel) =>
+        viewModel.PrepareVideoDeletions([viewModel.SelectedVideo!])!;
+
+    private static Task<VideoDeletionResult> DeleteSelectedVideoAsync(
+        MainViewModel viewModel) =>
+        viewModel.DeleteVideosAsync(PrepareSelectedVideo(viewModel));
 
     private static async Task<MainViewModel> CreateDeletionViewModel(
         LibraryStore store,
