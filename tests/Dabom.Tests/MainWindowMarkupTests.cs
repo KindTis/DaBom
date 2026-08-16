@@ -243,6 +243,11 @@ public sealed class MainWindowMarkupTests
 
         StringAssert.Contains(markup, "ItemsSource=\"{Binding VisibleItems}\"");
         StringAssert.Contains(markup, "SelectedItem=\"{Binding SelectedItem}\"");
+        StringAssert.Contains(markup, "SelectionMode=\"Extended\"");
+        StringAssert.Contains(markup, "SelectionChanged=\"OnVideoSelectionChanged\"");
+        StringAssert.Contains(
+            markup,
+            "Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}");
         Assert.IsFalse(videoList.Elements().Any(element =>
             element.Name.LocalName == "ListBox.Style"));
         StringAssert.Contains(
@@ -811,10 +816,18 @@ public sealed class MainWindowMarkupTests
     {
         var markup = ReadMainWindowMarkup();
         var code = ReadMainWindowCode();
+        var click = MethodBody(
+            code,
+            "private void OnCardClick",
+            "private void OpenSeason");
 
         StringAssert.Contains(markup, "Event=\"PreviewMouseLeftButtonUp\"");
         StringAssert.Contains(markup, "Handler=\"OnCardClick\"");
         StringAssert.Contains(markup, "Click=\"OnReturnToLibrary\"");
+        StringAssert.Contains(
+            click,
+            "Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)");
+        StringAssert.Contains(click, "OpenSeason(season);");
         StringAssert.Contains(code, "item.DataContext is SeasonItemViewModel season");
         StringAssert.Contains(code, "IsContinuationOfSeasonEntryClick(");
         StringAssert.Contains(code, "viewModel.SelectedItem is SeasonItemViewModel season");
@@ -824,6 +837,76 @@ public sealed class MainWindowMarkupTests
             "e.Key == Key.Escape && viewModel.IsSeasonView");
         StringAssert.Contains(code, "viewModel.CloseSeason();");
         StringAssert.Contains(code, "viewModel.NotifyMissingSelection();");
+    }
+
+    [STATestMethod]
+    [DoNotParallelize]
+    public void SelectionCriteria_KeepSameLogicalFilterAndResetActualChanges()
+    {
+        EnsureApplicationResources();
+        var root = Directory.CreateTempSubdirectory("dabom-multi-selection-");
+        var store = new LibraryStore(root.FullName);
+        var viewModel = new MainViewModel(
+            store,
+            new EmptyScanner(),
+            new LibraryData(),
+            _ => true,
+            () => DateTimeOffset.UtcNow,
+            _ => 0);
+        viewModel.Videos.Add(new VideoItemViewModel(
+            Path.Combine(root.FullName, "Movie.A.mkv"),
+            new VideoRecord(),
+            store));
+        viewModel.Videos.Add(new VideoItemViewModel(
+            Path.Combine(root.FullName, "Movie.B.mkv"),
+            new VideoRecord(),
+            store));
+        viewModel.SearchText = "Movie";
+        var window = new MainWindow { DataContext = viewModel };
+        window.Dispatcher.Invoke(
+            System.Windows.Threading.DispatcherPriority.DataBind,
+            new Action(() => { }));
+
+        try
+        {
+            var list = (ListBox)window.FindName("VideoList");
+            Assert.AreEqual(2, list.Items.Count);
+
+            void SelectBoth()
+            {
+                foreach (var item in list.Items) list.SelectedItems.Add(item);
+                Assert.AreEqual(2, list.SelectedItems.Count);
+            }
+
+            SelectBoth();
+            Assert.AreEqual(2, viewModel.SelectedItemCount);
+            window.ResetSelectionWhenCriteriaChanged(viewModel);
+            Assert.AreEqual(2, list.SelectedItems.Count,
+                "같은 논리 필터의 재알림은 선택을 유지해야 합니다.");
+            Assert.AreEqual(2, viewModel.SelectedItemCount);
+
+            viewModel.SearchText = "MOVIE";
+            Assert.AreEqual(0, list.SelectedItems.Count);
+            Assert.AreEqual(0, viewModel.SelectedItemCount);
+
+            SelectBoth();
+            viewModel.SelectedFilter = viewModel.FilterOptions.Single(option =>
+                option.Kind == LibraryFilterKind.MissingMetadata);
+            Assert.AreEqual(0, list.SelectedItems.Count);
+
+            SelectBoth();
+            viewModel.SelectedSort = VideoSort.ReleaseDate;
+            Assert.AreEqual(0, list.SelectedItems.Count);
+
+            SelectBoth();
+            viewModel.IsSortDescending = true;
+            Assert.AreEqual(0, list.SelectedItems.Count);
+        }
+        finally
+        {
+            window.Close();
+            root.Delete(true);
+        }
     }
 
     [STATestMethod]

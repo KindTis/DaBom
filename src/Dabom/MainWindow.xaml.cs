@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     private double _seasonReturnOffset;
     private int? _seasonEntryClickTimestamp;
     private Point _seasonEntryClickPosition;
+    private SelectionCriteria? _selectionCriteria;
     private readonly Queue<ToastEntry> _pendingToasts = [];
     private readonly Dictionary<ToastEntry, FrameworkElement> _toastElements = [];
     private readonly CancellationTokenSource _toastCancellation = new();
@@ -42,6 +43,31 @@ public partial class MainWindow : Window
     private bool _toastPumpRunning;
 
     private sealed record ToastEntry(long Id, ToastRequest Request);
+
+    internal readonly record struct SelectionCriteria(
+        string SearchText,
+        LibraryFilterKind FilterKind,
+        string? FilterGenre,
+        VideoSort Sort,
+        bool IsSortDescending)
+    {
+        internal static SelectionCriteria From(MainViewModel viewModel) => new(
+            viewModel.SearchText ?? string.Empty,
+            viewModel.SelectedFilter?.Kind ?? LibraryFilterKind.All,
+            viewModel.SelectedFilter?.Genre,
+            viewModel.SelectedSort,
+            viewModel.IsSortDescending);
+
+        internal bool SameAs(SelectionCriteria other) =>
+            SearchText == other.SearchText
+            && FilterKind == other.FilterKind
+            && string.Equals(
+                FilterGenre,
+                other.FilterGenre,
+                StringComparison.CurrentCultureIgnoreCase)
+            && Sort == other.Sort
+            && IsSortDescending == other.IsSortDescending;
+    }
 
     internal static int DoubleClickTime => unchecked((int)GetDoubleClickTime());
     internal static double DoubleClickWidth => GetSystemMetrics(DoubleClickWidthMetric);
@@ -74,6 +100,11 @@ public partial class MainWindow : Window
             newViewModel.MetadataEditRequested += OnMetadataEditRequested;
             newViewModel.PropertyChanged += OnViewModelPropertyChanged;
             newViewModel.ToastRequested += OnToastRequested;
+            _selectionCriteria = SelectionCriteria.From(newViewModel);
+        }
+        else
+        {
+            _selectionCriteria = null;
         }
         _seasonReturnKey = null;
     }
@@ -366,18 +397,37 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
+    internal void ResetSelectionWhenCriteriaChanged(MainViewModel viewModel)
+    {
+        var next = SelectionCriteria.From(viewModel);
+        if (_selectionCriteria is { } current && !current.SameAs(next))
+        {
+            VideoList.UnselectAll();
+        }
+        _selectionCriteria = next;
+    }
+
     private void OnViewModelPropertyChanged(
         object? sender,
         PropertyChangedEventArgs e)
     {
+        if (sender is MainViewModel viewModel
+            && e.PropertyName is nameof(MainViewModel.SearchText)
+                or nameof(MainViewModel.SelectedFilter)
+                or nameof(MainViewModel.SelectedSort)
+                or nameof(MainViewModel.IsSortDescending))
+        {
+            ResetSelectionWhenCriteriaChanged(viewModel);
+        }
+
         if (e.PropertyName == nameof(MainViewModel.IsSeasonView)
-            && sender is MainViewModel viewModel
-            && !viewModel.IsSeasonView
+            && sender is MainViewModel seasonViewModel
+            && !seasonViewModel.IsSeasonView
             && _seasonReturnKey is not null)
         {
             Dispatcher.BeginInvoke(
                 DispatcherPriority.Loaded,
-                () => RestoreSeasonReturn(viewModel));
+                () => RestoreSeasonReturn(seasonViewModel));
         }
     }
 
@@ -458,6 +508,12 @@ public partial class MainWindow : Window
 
     private void OnCardClick(object sender, MouseButtonEventArgs e)
     {
+        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift))
+            != ModifierKeys.None)
+        {
+            return;
+        }
+
         if (sender is ListBoxItem item
             && item.DataContext is SeasonItemViewModel season)
         {
@@ -465,6 +521,14 @@ public partial class MainWindow : Window
             _seasonEntryClickTimestamp = e.Timestamp;
             _seasonEntryClickPosition = e.GetPosition(this);
             OpenSeason(season);
+        }
+    }
+
+    private void OnVideoSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.UpdateSelectedItemCount(((ListBox)sender).SelectedItems.Count);
         }
     }
 

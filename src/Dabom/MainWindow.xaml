@@ -688,6 +688,8 @@
                          BorderThickness="0" Background="Transparent"
                          ItemsSource="{Binding VisibleItems}"
                          SelectedItem="{Binding SelectedItem}"
+                         SelectionMode="Extended"
+                         SelectionChanged="OnVideoSelectionChanged"
                          AutomationProperties.ItemStatus="{Binding DisplayItemCount, StringFormat={}{0}개 항목}"
                          KeyDown="OnVideoListKeyDown"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">

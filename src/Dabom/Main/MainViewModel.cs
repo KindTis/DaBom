@@ -155,6 +155,7 @@ public sealed class MainViewModel : ViewModelBase
         ToastRequested?.Invoke(this, new(message, result, video));
 
     private LibraryItemViewModel? _selectedItem;
+    private int _selectedItemCount;
     private SeasonGroupKey? _activeSeasonKey;
     private string _seasonDisplayTitle = string.Empty;
     private SeasonItemViewModel? _activeSeason;
@@ -165,9 +166,25 @@ public sealed class MainViewModel : ViewModelBase
         set
         {
             if (!Set(ref _selectedItem, value)) return;
+            if (value is null)
+            {
+                UpdateSelectedItemCount(0);
+            }
+            else if (SelectedItemCount == 0)
+            {
+                UpdateSelectedItemCount(1);
+            }
             Raise(nameof(SelectedVideo));
             RefreshCommandStates();
         }
+    }
+
+    public int SelectedItemCount => _selectedItemCount;
+
+    internal void UpdateSelectedItemCount(int count)
+    {
+        if (!Set(ref _selectedItemCount, count, nameof(SelectedItemCount))) return;
+        RefreshCommandStates();
     }
 
     public VideoItemViewModel? SelectedVideo
