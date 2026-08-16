@@ -80,17 +80,7 @@ public partial class MetadataWindow : Window
             return;
         }
 
-        await Dispatcher.BeginInvoke(
-            DispatcherPriority.Input,
-            () =>
-            {
-                SearchResultsList.SelectedIndex = 0;
-                if (SearchResultsList.ItemContainerGenerator
-                        .ContainerFromIndex(0) is ListBoxItem item)
-                {
-                    item.Focus();
-                }
-            });
+        await FocusFirstItemAsync(SearchResultsList);
     }
 
     private async void OnSearchResultClick(
@@ -126,32 +116,109 @@ public partial class MetadataWindow : Window
         {
             TitleBox.Focus();
         }
-        else if (viewModel.PendingTvCandidate is not null)
+        else if (viewModel.IsSeasonStep)
         {
-            SeasonNumberBox.Focus();
+            await FocusFirstItemAsync(TvSeasonsList);
+        }
+        else if (viewModel.IsEpisodeStep)
+        {
+            await FocusFirstItemAsync(TvEpisodesList);
         }
     }
 
-    private async void OnApplyEpisode(object sender, RoutedEventArgs e) =>
-        await ApplyEpisodeAsync();
-
-    private async void OnEpisodeKeyDown(object sender, KeyEventArgs e)
+    private async void OnSeasonClick(object sender, MouseButtonEventArgs e)
     {
-        if (e.Key != Key.Enter)
+        if (ItemsControl.ContainerFromElement(
+                TvSeasonsList,
+                (DependencyObject)e.OriginalSource) is ListBoxItem item
+            && item.DataContext is TvSeasonCandidate season)
+        {
+            await SelectSeasonAsync(season);
+        }
+    }
+
+    private async void OnSeasonsKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter
+            || TvSeasonsList.SelectedItem is not TvSeasonCandidate season)
         {
             return;
         }
         e.Handled = true;
-        await ApplyEpisodeAsync();
+        await SelectSeasonAsync(season);
     }
 
-    private async Task ApplyEpisodeAsync()
+    private async Task SelectSeasonAsync(TvSeasonCandidate season)
     {
-        if (await ((MetadataEditorViewModel)DataContext)
-                .ApplyTvEpisodeAsync())
+        var viewModel = (MetadataEditorViewModel)DataContext;
+        await viewModel.SelectSeasonAsync(season);
+        if (viewModel.IsEpisodeStep)
+        {
+            await FocusFirstItemAsync(TvEpisodesList);
+        }
+    }
+
+    private async void OnEpisodeClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ItemsControl.ContainerFromElement(
+                TvEpisodesList,
+                (DependencyObject)e.OriginalSource) is ListBoxItem item
+            && item.DataContext is TvEpisodeCandidate episode)
+        {
+            await SelectEpisodeAsync(episode);
+        }
+    }
+
+    private async void OnEpisodesKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter
+            || TvEpisodesList.SelectedItem is not TvEpisodeCandidate episode)
+        {
+            return;
+        }
+        e.Handled = true;
+        await SelectEpisodeAsync(episode);
+    }
+
+    private async Task SelectEpisodeAsync(TvEpisodeCandidate episode)
+    {
+        if (await ((MetadataEditorViewModel)DataContext).SelectEpisodeAsync(episode))
         {
             TitleBox.Focus();
         }
+    }
+
+    private async void OnLookupBack(object sender, RoutedEventArgs e)
+    {
+        var viewModel = (MetadataEditorViewModel)DataContext;
+        viewModel.GoBackInLookup();
+        if (viewModel.IsSeasonStep)
+        {
+            await FocusFirstItemAsync(TvSeasonsList);
+        }
+        else if (viewModel.IsSearchResultStep)
+        {
+            await FocusFirstItemAsync(SearchResultsList);
+        }
+    }
+
+    private async Task FocusFirstItemAsync(ListBox list)
+    {
+        if (list.Items.Count == 0)
+        {
+            return;
+        }
+
+        await Dispatcher.BeginInvoke(
+            DispatcherPriority.Input,
+            () =>
+            {
+                list.SelectedIndex = 0;
+                if (list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem item)
+                {
+                    item.Focus();
+                }
+            });
     }
 
     private void OnPopupKeyDown(object sender, KeyEventArgs e)

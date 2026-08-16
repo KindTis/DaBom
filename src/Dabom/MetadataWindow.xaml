@@ -125,14 +125,45 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <ListBox x:Name="SearchResultsList"
-                                         MaxHeight="320"
-                                         ItemsSource="{Binding SearchCandidates}"
-                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                         PreviewMouseLeftButtonUp="OnSearchResultClick"
-                                         KeyDown="OnSearchResultsKeyDown">
+                                <Grid>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSearchResultStep}"
+                                                             Value="False">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="{Binding LookupHintText}"
+                                               Foreground="{StaticResource MutedBrush}"
+                                               Margin="4,0,4,4">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding LookupHintText}"
+                                                                 Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <ListBox x:Name="SearchResultsList"
+                                             Grid.Row="1"
+                                             MaxHeight="320"
+                                             ItemsSource="{Binding SearchCandidates}"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             PreviewMouseLeftButtonUp="OnSearchResultClick"
+                                             KeyDown="OnSearchResultsKeyDown">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Grid Margin="4">
@@ -170,40 +201,109 @@
                                             </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
-                                </ListBox>
+                                    </ListBox>
+                                </Grid>
 
-                                <StackPanel Grid.Row="1" Margin="4,8,4,0">
-                                    <StackPanel.Style>
-                                        <Style TargetType="StackPanel">
-                                            <Setter Property="Visibility" Value="Visible" />
+                                <Grid>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Visibility" Value="Collapsed" />
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PendingTvCandidate}"
-                                                             Value="{x:Null}">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                <DataTrigger Binding="{Binding IsSeasonStep}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </StackPanel.Style>
-                                    <TextBlock Text="시즌과 에피소드 번호를 입력하세요."
-                                               Margin="0,0,0,6" />
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBox x:Name="SeasonNumberBox"
-                                                 Width="80"
-                                                 Text="{Binding SeasonNumberText, UpdateSourceTrigger=PropertyChanged}"
-                                                 KeyDown="OnEpisodeKeyDown" />
-                                        <TextBox x:Name="EpisodeNumberBox"
-                                                 Width="80"
-                                                 Margin="8,0,0,0"
-                                                 Text="{Binding EpisodeNumberText, UpdateSourceTrigger=PropertyChanged}"
-                                                 KeyDown="OnEpisodeKeyDown" />
-                                        <Button Content="회차 적용"
-                                                Margin="8,0,0,0"
-                                                IsEnabled="{Binding CanApplyTvEpisode}"
-                                                Click="OnApplyEpisode" />
-                                    </StackPanel>
-                                </StackPanel>
+                                    </Grid.Style>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Button Content="← 이전"
+                                            HorizontalAlignment="Left"
+                                            Margin="4,0,4,4"
+                                            Click="OnLookupBack" />
+                                    <ListBox x:Name="TvSeasonsList"
+                                             Grid.Row="1"
+                                             MaxHeight="320"
+                                             ItemsSource="{Binding TvSeasons}"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             PreviewMouseLeftButtonUp="OnSeasonClick"
+                                             KeyDown="OnSeasonsKeyDown">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding Name}"
+                                                                   FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding SeasonNumber, StringFormat=시즌 {0}}"
+                                                                   Foreground="{StaticResource MutedBrush}" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1"
+                                                               VerticalAlignment="Center"
+                                                               Text="{Binding EpisodeCount, StringFormat={}{0}편}"
+                                                               Foreground="{StaticResource MutedBrush}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
 
-                                <TextBlock Grid.Row="2"
+                                <Grid>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsEpisodeStep}"
+                                                             Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Button Content="← 이전"
+                                            HorizontalAlignment="Left"
+                                            Margin="4,0,4,4"
+                                            Click="OnLookupBack" />
+                                    <ListBox x:Name="TvEpisodesList"
+                                             Grid.Row="1"
+                                             MaxHeight="320"
+                                             ItemsSource="{Binding TvEpisodes}"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             PreviewMouseLeftButtonUp="OnEpisodeClick"
+                                             KeyDown="OnEpisodesKeyDown">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding EpisodeNumber, StringFormat={}{0}화}"
+                                                               FontWeight="SemiBold" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Margin="8,0"
+                                                               Text="{Binding Name}" />
+                                                    <TextBlock Grid.Column="2"
+                                                               Text="{Binding AirDate}"
+                                                               Foreground="{StaticResource MutedBrush}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+
+                                <TextBlock Grid.Row="1"
                                            Text="{Binding ErrorMessage}"
                                            Foreground="#FFE28B8B"
                                            TextWrapping="Wrap"
