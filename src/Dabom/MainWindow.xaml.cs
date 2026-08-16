@@ -546,6 +546,23 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnCleanMissingVideos(object sender, RoutedEventArgs e)
+    {
+        var viewModel = (MainViewModel)DataContext;
+        var preparation = viewModel.PrepareMissingVideoCleanup();
+        if (preparation is null) return;
+
+        var confirmation = new VideoDeletionConfirmationWindow(
+            preparation.Requests,
+            preparation.Failures.Count)
+        {
+            Owner = this
+        };
+        if (confirmation.ShowDialog() != true) return;
+
+        await viewModel.DeleteVideosAsync(preparation);
+    }
+
     private async void OnVideoListKeyDown(object sender, KeyEventArgs e)
     {
         var viewModel = (MainViewModel)DataContext;

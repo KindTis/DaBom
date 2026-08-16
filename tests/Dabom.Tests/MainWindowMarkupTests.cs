@@ -287,6 +287,32 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void MissingFileCleanup_PrecedesRescanInLibraryFooter()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        XNamespace presentation =
+            "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XNamespace x =
+            "http://schemas.microsoft.com/winfx/2006/xaml";
+        var footer = document.Descendants(presentation + "Grid").Single(element =>
+            (string?)element.Attribute(x + "Name") == "LibraryFooter");
+        var buttons = footer.Descendants(presentation + "Button").ToArray();
+        var cleanup = buttons.SingleOrDefault(element =>
+            (string?)element.Attribute("Content") == "파일 없음 정리");
+        var rescan = buttons.Single(element =>
+            (string?)element.Attribute("Content") == "폴더 다시 확인");
+
+        Assert.IsNotNull(cleanup, "파일 없음 정리 버튼이 필요합니다.");
+        Assert.AreEqual(
+            Array.IndexOf(buttons, rescan) - 1,
+            Array.IndexOf(buttons, cleanup));
+        Assert.AreEqual(
+            "{Binding CanCleanMissingVideos}",
+            (string?)cleanup.Attribute("IsEnabled"));
+        Assert.AreEqual("OnCleanMissingVideos", (string?)cleanup.Attribute("Click"));
+    }
+
+    [TestMethod]
     public void DeleteKey_SnapshotsDisplayOrderAndReselectsOnlyFailedVideos()
     {
         var code = ReadMainWindowCode();

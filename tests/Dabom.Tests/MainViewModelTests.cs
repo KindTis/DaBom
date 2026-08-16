@@ -3618,6 +3618,64 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void PrepareMissingVideoCleanup_IncludesOnlyStillMissingVideos()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-clean-missing-");
+        try
+        {
+            var stillMissing = Path.Combine(root.FullName, "Missing.mkv");
+            var reappeared = Path.Combine(root.FullName, "Reappeared.mkv");
+            var unavailable = Path.Combine(root.FullName, "Unavailable.mkv");
+            var present = Path.Combine(root.FullName, "Present.mkv");
+            var paths = new[] { stillMissing, reappeared, unavailable, present };
+            var store = new LibraryStore(root.FullName);
+            var data = CachedData(root.FullName, paths);
+            var identity = new FileIdentity(7, 10, 20);
+            var viewModel = new MainViewModel(
+                store,
+                new StubScanner(),
+                data,
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                _ => 0,
+                null,
+                path => path == stillMissing
+                    ? new(VideoFileStatus.Missing, null)
+                    : path == reappeared
+                        ? new(VideoFileStatus.Present, identity)
+                        : throw new AssertFailedException($"정리 대상이 아닌 파일을 확인했습니다: {path}"),
+                _ => Assert.Fail());
+            foreach (var path in paths)
+            {
+                viewModel.Videos.Add(new VideoItemViewModel(
+                    path,
+                    data.VideosByPath[path],
+                    store));
+            }
+            viewModel.Videos[0].FileStatus = VideoFileStatus.Missing;
+            viewModel.Videos[1].FileStatus = VideoFileStatus.Missing;
+            viewModel.Videos[2].FileStatus = VideoFileStatus.Unavailable;
+            viewModel.Videos[3].FileStatus = VideoFileStatus.Present;
+
+            var preparation = viewModel.PrepareMissingVideoCleanup();
+
+            Assert.IsNotNull(preparation);
+            Assert.AreEqual(2, preparation.VideoCount);
+            Assert.AreEqual(stillMissing, preparation.Requests.Single().Video.Path);
+            Assert.AreEqual(VideoFileStatus.Missing, preparation.Requests.Single().Status);
+            Assert.AreEqual(reappeared, preparation.Failures.Single().Video.Path);
+            Assert.AreEqual(
+                VideoDeletionFailureKind.FileStatus,
+                preparation.Failures.Single().Kind);
+            Assert.IsTrue(viewModel.CanCleanMissingVideos);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void PrepareVideoDeletions_PreservesVideoOrderAndExcludesSeasonAndUnsafeItem()
     {
         var root = Directory.CreateTempSubdirectory("dabom-delete-prepare-many-");
@@ -3684,6 +3742,66 @@ public sealed class MainViewModelTests
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public void DeleteVideos_KeepsVisibleItemsUntilBatchCompletes()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-delete-batch-ui-");
+            try
+            {
+                var first = Path.Combine(root.FullName, "First.mkv");
+                var second = Path.Combine(root.FullName, "Second.mkv");
+                var secondSaveStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var continueSecondSave = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var saveCalls = 0;
+                var store = new LibraryStore(root.FullName, async (temporary, destination, _) =>
+                {
+                    if (++saveCalls == 2)
+                    {
+                        secondSaveStarted.SetResult();
+                        await continueSecondSave.Task;
+                    }
+                    File.Move(temporary, destination, true);
+                });
+                var viewModel = new MainViewModel(
+                    store,
+                    new StubScanner(first, second),
+                    CachedData(root.FullName, first, second),
+                    _ => true,
+                    () => DateTimeOffset.UtcNow,
+                    _ => 0,
+                    null,
+                    _ => new(VideoFileStatus.Missing, null),
+                    _ => Assert.Fail("누락 파일을 휴지통으로 이동하면 안 됩니다."));
+                await viewModel.ScanAsync();
+                var preparation = viewModel.PrepareVideoDeletions(
+                    viewModel.Videos.Cast<LibraryItemViewModel>().ToArray())!;
+
+                var deletion = viewModel.DeleteVideosAsync(preparation);
+                await secondSaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                try
+                {
+                    Assert.AreEqual(2, viewModel.VisibleItems.Count);
+                }
+                finally
+                {
+                    continueSecondSave.SetResult();
+                    await deletion;
+                }
+
+                Assert.AreEqual(0, viewModel.VisibleItems.Count);
+                Assert.AreEqual(0, viewModel.Videos.Count);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
     }
 
     [TestMethod]

@@ -333,6 +333,8 @@ public sealed class MainViewModel : ViewModelBase
         && !IsChangingLocations
         && !IsRecordingPlayback
         && !IsDeleting;
+    public bool CanCleanMissingVideos =>
+        CanMutateLibrary && Videos.Any(video => video.FileStatus == VideoFileStatus.Missing);
 
     public void NotifyMissingSelection()
     {
@@ -830,6 +832,28 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    internal VideoDeletionPreparation? PrepareMissingVideoCleanup()
+    {
+        var preparation = PrepareVideoDeletions(Videos
+            .Where(video => video.FileStatus == VideoFileStatus.Missing)
+            .Cast<LibraryItemViewModel>()
+            .ToArray());
+        if (preparation is null) return null;
+
+        var requests = preparation.Requests
+            .Where(request => request.Status == VideoFileStatus.Missing)
+            .ToArray();
+        var failures = preparation.Failures
+            .Concat(preparation.Requests
+                .Where(request => request.Status != VideoFileStatus.Missing)
+                .Select(request => FileStatusFailure(request.Video)))
+            .ToArray();
+        if (requests.Length > 0) return new(requests, failures);
+
+        RequestDeletionSummary(0, failures, preparation.VideoCount);
+        return null;
+    }
+
     internal VideoDeletionPreparation? PrepareVideoDeletions(
         IReadOnlyList<LibraryItemViewModel> selectedItems)
     {
@@ -885,6 +909,7 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         var failures = new List<VideoDeletionFailure>(preparation.Failures);
+        var deletedVideos = new List<VideoItemViewModel>();
         var deletedCount = 0;
         IsDeleting = true;
         try
@@ -895,12 +920,14 @@ public sealed class MainViewModel : ViewModelBase
                 if (failure is null)
                 {
                     deletedCount++;
+                    deletedVideos.Add(request.Video);
                 }
                 else
                 {
                     failures.Add(failure);
                 }
             }
+            RemoveVideosFromScreen(deletedVideos);
         }
         finally
         {
@@ -963,7 +990,6 @@ public sealed class MainViewModel : ViewModelBase
         }
 
         _data = next;
-        RemoveVideoFromScreen(request.Video);
         return null;
     }
 
@@ -1434,12 +1460,14 @@ public sealed class MainViewModel : ViewModelBase
         return _data with { VideosByPath = records };
     }
 
-    private void RemoveVideoFromScreen(VideoItemViewModel video)
+    private void RemoveVideosFromScreen(IReadOnlyCollection<VideoItemViewModel> videos)
     {
-        if (ReferenceEquals(SelectedVideo, video)) SelectedVideo = null;
-        Videos.Remove(video);
+        if (videos.Count == 0) return;
+        if (SelectedVideo is not null && videos.Contains(SelectedVideo)) SelectedVideo = null;
+        var replaceFeatured = FeaturedVideo is not null && videos.Contains(FeaturedVideo);
+        foreach (var video in videos) Videos.Remove(video);
         RefreshLibraryView(true);
-        if (ReferenceEquals(FeaturedVideo, video)) FeaturedVideo = PickFeatured();
+        if (replaceFeatured) FeaturedVideo = PickFeatured();
     }
 
     private VideoItemViewModel? PickFeatured()
@@ -1471,6 +1499,7 @@ public sealed class MainViewModel : ViewModelBase
 
     private void RefreshCommandStates()
     {
+        Raise(nameof(CanCleanMissingVideos));
         ((AsyncRelayCommand)RescanCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)PlayCommand).RaiseCanExecuteChanged();
         ((AsyncRelayCommand)PlayFeaturedCommand).RaiseCanExecuteChanged();

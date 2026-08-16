@@ -937,6 +937,9 @@
                                 <Run Text="건" />
                             </TextBlock>
                         </Button>
+                        <Button Content="파일 없음 정리" Margin="0,0,10,0"
+                                IsEnabled="{Binding CanCleanMissingVideos}"
+                                Click="OnCleanMissingVideos" />
                         <Button Content="폴더 다시 확인" Command="{Binding RescanCommand}" />
                     </StackPanel>
             </Grid>
