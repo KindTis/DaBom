@@ -152,6 +152,80 @@ public sealed class TmdbMetadataProviderTests
         StringAssert.Contains(request.Uri.Query, "language=ko-KR");
     }
 
+    [DataTestMethod]
+    [DataRow("Raised by Wolves 2020")]
+    [DataRow("2020 Raised by Wolves")]
+    public async Task SearchTvAsync_WhenBoundaryYearSearchIsEmpty_RetriesExactSeries(
+        string title)
+    {
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            Json("""{"results":[]}"""),
+            Json("""
+                {"results":[
+                  {"id":1,"name":"레이즈드 바이 울브스","original_name":"Raised by Wolves","first_air_date":"2019-09-03"},
+                  {"id":2,"name":"레이즈드 바이 울브스: 엑스트라","original_name":"Raised by Wolves: Extras","first_air_date":"2020-09-03"},
+                  {"id":85723,"name":"레이즈드 바이 울브스","original_name":"Raised by Wolves","first_air_date":"2020-09-03"}
+                ]}
+                """)
+        ]);
+        var handler = new RecordingHandler(_ => responses.Dequeue());
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var candidate = (await provider.SearchAsync(
+            new(MediaType.TvEpisode, title, null, 1, 1),
+            CancellationToken.None)).Single();
+
+        Assert.AreEqual("85723", candidate.ResourceId);
+        Assert.AreEqual(1, candidate.SeasonNumber);
+        Assert.AreEqual(1, candidate.EpisodeNumber);
+        Assert.AreEqual(2, handler.Requests.Count);
+        StringAssert.Contains(
+            Uri.UnescapeDataString(handler.Requests[0].Uri.Query),
+            $"query={title}");
+        StringAssert.Contains(
+            Uri.UnescapeDataString(handler.Requests[1].Uri.Query),
+            "query=Raised by Wolves");
+        StringAssert.Contains(
+            handler.Requests[1].Uri.Query,
+            "first_air_date_year=2020");
+    }
+
+    [TestMethod]
+    public async Task SearchTvAsync_WhenOriginalSearchSucceeds_PreservesResults()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"results":[{"id":42},{"id":43}]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var candidates = await provider.SearchAsync(
+            new(MediaType.TvEpisode, "Class of 1999", null, 1, 1),
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "42", "43" },
+            candidates.Select(candidate => candidate.ResourceId).ToArray());
+        Assert.AreEqual(1, handler.Requests.Count);
+    }
+
+    [TestMethod]
+    public async Task SearchTvAsync_WhenTitleIsOnlyYear_DoesNotRetry()
+    {
+        var handler = new RecordingHandler(_ => Json("""{"results":[]}"""));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var candidates = await provider.SearchAsync(
+            new(MediaType.TvEpisode, "1899", null, 1, 1),
+            CancellationToken.None);
+
+        Assert.AreEqual(0, candidates.Count);
+        Assert.AreEqual(1, handler.Requests.Count);
+    }
+
     [TestMethod]
     public async Task SearchAsync_Unknown_MapsMovieAndTvAndSkipsUnsupportedResults()
     {

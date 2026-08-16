@@ -207,6 +207,37 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             throw InvalidResponse("TMDB 검색 결과 ID가 올바르지 않습니다.");
         }
 
+        if (query.MediaType == MediaType.TvEpisode
+            && results.Length == 0
+            && TryGetBoundaryYearSearch(
+                query.Title,
+                out var fallbackTitle,
+                out var fallbackYear))
+        {
+            var fallbackResponse = await SendJsonAsync<SearchResponse>(
+                $"search/tv?query={Uri.EscapeDataString(fallbackTitle)}"
+                + $"&language=ko-KR&first_air_date_year={fallbackYear}",
+                cancellationToken);
+            var fallbackResults = fallbackResponse.Results
+                ?? throw InvalidResponse("TMDB 검색 결과 형식이 올바르지 않습니다.");
+            if (fallbackResults.Any(result => result.Id <= 0))
+            {
+                throw InvalidResponse("TMDB 검색 결과 ID가 올바르지 않습니다.");
+            }
+
+            results = fallbackResults.Where(result =>
+                (string.Equals(
+                    result.Name?.Trim(),
+                    fallbackTitle,
+                    StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(
+                    result.OriginalName?.Trim(),
+                    fallbackTitle,
+                    StringComparison.OrdinalIgnoreCase))
+                && ParseDate(result.FirstAirDate)?.Year == fallbackYear)
+                .ToArray();
+        }
+
         return results.Select(result => new MetadataCandidate(
             ProviderKey,
             query.MediaType == MediaType.Movie ? "movie" : "tv-series",
@@ -214,6 +245,39 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             query.MediaType,
             query.SeasonNumber,
             query.EpisodeNumber)).ToArray();
+    }
+
+    private static bool TryGetBoundaryYearSearch(
+        string title,
+        out string fallbackTitle,
+        out int year)
+    {
+        fallbackTitle = string.Empty;
+        year = 0;
+        var tokens = title.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2) return false;
+
+        var hasLeadingYear = TryParseSearchYear(tokens[0], out var leadingYear);
+        var hasTrailingYear = TryParseSearchYear(tokens[^1], out var trailingYear);
+        if (hasLeadingYear == hasTrailingYear) return false;
+
+        year = hasLeadingYear ? leadingYear : trailingYear;
+        fallbackTitle = string.Join(
+            ' ',
+            hasLeadingYear ? tokens[1..] : tokens[..^1]);
+        return fallbackTitle.Any(char.IsLetterOrDigit);
+    }
+
+    private static bool TryParseSearchYear(string value, out int year)
+    {
+        year = 0;
+        return value.Length == 4
+            && int.TryParse(
+                value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out year)
+            && year is >= 1900 and <= 2099;
     }
 
     public Task<MetadataDetails> GetDetailsAsync(
