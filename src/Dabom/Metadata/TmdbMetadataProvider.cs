@@ -97,6 +97,11 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         var response = await SendJsonAsync<TvSeasonEpisodesResponse>(
             $"tv/{seriesId}/season/{seasonNumber}?language=ko-KR",
             cancellationToken);
+        if (response.SeasonNumber < 0
+            || response.SeasonNumber != seasonNumber)
+        {
+            throw InvalidResponse("TMDB TV 시즌 응답 번호가 올바르지 않습니다.");
+        }
         var episodes = response.Episodes
             ?? throw InvalidResponse("TMDB TV 에피소드 목록 형식이 올바르지 않습니다.");
 
@@ -870,6 +875,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     private sealed record TvSeasonEpisodesResponse
     {
+        [JsonPropertyName("season_number")]
+        public int SeasonNumber { get; init; }
+
         [JsonPropertyName("episodes")]
         public TvSeasonEpisodeResponse[]? Episodes { get; init; }
     }

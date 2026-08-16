@@ -60,6 +60,42 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
+    public async Task GetTvEpisodesAsync_RejectsDifferentResponseSeasonNumber()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"id":99,"season_number":1,"episodes":[]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var error = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => provider.GetTvEpisodesAsync(
+                new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+                0,
+                CancellationToken.None));
+
+        Assert.AreEqual(MetadataProviderFailureKind.InvalidResponse, error.Kind);
+    }
+
+    [TestMethod]
+    public async Task GetTvEpisodesAsync_RejectsNegativeResponseSeasonNumber()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"id":99,"season_number":-1,"episodes":[]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var error = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => provider.GetTvEpisodesAsync(
+                new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+                0,
+                CancellationToken.None));
+
+        Assert.AreEqual(MetadataProviderFailureKind.InvalidResponse, error.Kind);
+    }
+
+    [TestMethod]
     public async Task SearchMovieAsync_UsesBearerKoreanQueryAndYear()
     {
         var handler = new RecordingHandler(_ => Json("""
