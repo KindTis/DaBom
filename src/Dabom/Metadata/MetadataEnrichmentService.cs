@@ -166,6 +166,24 @@ public sealed class MetadataEnrichmentService
         }
     }
 
+    public Task<IReadOnlyList<TvSeasonCandidate>> GetManualTvSeasonsAsync(
+        MetadataCandidate series,
+        CancellationToken cancellationToken) =>
+        ExecuteManualProviderCallAsync(
+            series,
+            (provider, token) => provider.GetTvSeasonsAsync(series, token),
+            cancellationToken);
+
+    public Task<IReadOnlyList<TvEpisodeCandidate>> GetManualTvEpisodesAsync(
+        MetadataCandidate series,
+        int seasonNumber,
+        CancellationToken cancellationToken) =>
+        ExecuteManualProviderCallAsync(
+            series,
+            (provider, token) => provider.GetTvEpisodesAsync(
+                series, seasonNumber, token),
+            cancellationToken);
+
     internal Task<string> DownloadPosterAsync(
         Uri source,
         CancellationToken cancellationToken) =>
@@ -412,6 +430,47 @@ public sealed class MetadataEnrichmentService
         }
 
         return new(matched, notFound, failed, authenticationFailed);
+    }
+
+    private async Task<T> ExecuteManualProviderCallAsync<T>(
+        MetadataCandidate candidate,
+        Func<IMetadataProvider, CancellationToken, Task<T>> call,
+        CancellationToken cancellationToken)
+    {
+        var provider = _providers.FirstOrDefault(provider =>
+            string.Equals(
+                provider.ProviderKey,
+                candidate.ProviderKey,
+                StringComparison.Ordinal))
+            ?? throw new MetadataProviderException(
+                MetadataProviderFailureKind.InvalidResponse,
+                "검색 후보를 제공한 메타데이터 공급자를 찾을 수 없습니다.");
+        var unavailableUntil =
+            new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var deadline = _utcNow() + _itemBudget;
+        using var budget = new CancellationTokenSource(_itemBudget);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            budget.Token);
+
+        try
+        {
+            return await ExecuteProviderCallAsync(
+                provider,
+                token => call(provider, token),
+                deadline,
+                unavailableUntil,
+                linked.Token,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (budget.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+        {
+            throw new MetadataProviderException(
+                MetadataProviderFailureKind.Transient,
+                "메타데이터 목록 조회 시간이 초과되었습니다.");
+        }
     }
 
     private async Task<T> ExecuteProviderCallAsync<T>(

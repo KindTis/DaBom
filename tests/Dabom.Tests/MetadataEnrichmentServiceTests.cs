@@ -1156,6 +1156,33 @@ public sealed class MetadataEnrichmentServiceTests
             missing.Kind);
     }
 
+    [TestMethod]
+    public async Task ManualTvBrowsing_UsesCandidateProvider()
+    {
+        var unused = FakeProvider.Empty("unused");
+        var selected = new FakeProvider(
+            "selected",
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([]),
+            (_, _) => throw new AssertFailedException("상세 조회를 호출하면 안 됩니다."),
+            (_, _) => Task.FromResult<IReadOnlyList<TvSeasonCandidate>>(
+                [new(0, "Specials", 1)]),
+            (_, _, _) => Task.FromResult<IReadOnlyList<TvEpisodeCandidate>>(
+                [new(1, "특별편", new DateOnly(2001, 1, 1))]));
+        var service = CreateService(unused, selected);
+        var series = new MetadataCandidate(
+            "selected", "tv-series", "1431", MediaType.TvEpisode);
+
+        var seasons = await service.GetManualTvSeasonsAsync(
+            series, CancellationToken.None);
+        var episodes = await service.GetManualTvEpisodesAsync(
+            series, 0, CancellationToken.None);
+
+        Assert.AreEqual(0, seasons.Single().SeasonNumber);
+        Assert.AreEqual(1, episodes.Single().EpisodeNumber);
+        Assert.AreEqual(0, unused.TvBrowseCalls);
+        Assert.AreEqual(2, selected.TvBrowseCalls);
+    }
+
     private MetadataEnrichmentService CreateService(
         params IMetadataProvider[] providers) =>
         new(
@@ -1318,15 +1345,21 @@ public sealed class MetadataEnrichmentServiceTests
         string providerKey,
         Func<MetadataQuery, CancellationToken,
             Task<IReadOnlyList<MetadataCandidate>>> search,
-        Func<MetadataCandidate, CancellationToken, Task<MetadataDetails>> details)
+        Func<MetadataCandidate, CancellationToken, Task<MetadataDetails>> details,
+        Func<MetadataCandidate, CancellationToken,
+            Task<IReadOnlyList<TvSeasonCandidate>>>? seasons = null,
+        Func<MetadataCandidate, int, CancellationToken,
+            Task<IReadOnlyList<TvEpisodeCandidate>>>? episodes = null)
         : IMetadataProvider
     {
         public string ProviderKey { get; } = providerKey;
         private int _searchCalls;
         private int _detailsCalls;
+        private int _tvBrowseCalls;
 
         public int SearchCalls => Volatile.Read(ref _searchCalls);
         public int DetailsCalls => Volatile.Read(ref _detailsCalls);
+        public int TvBrowseCalls => Volatile.Read(ref _tvBrowseCalls);
 
         public async Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
             MetadataQuery query,
@@ -1342,6 +1375,27 @@ public sealed class MetadataEnrichmentServiceTests
         {
             Interlocked.Increment(ref _detailsCalls);
             return await details(candidate, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<TvSeasonCandidate>> GetTvSeasonsAsync(
+            MetadataCandidate series,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _tvBrowseCalls);
+            return seasons is null
+                ? []
+                : await seasons(series, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<TvEpisodeCandidate>> GetTvEpisodesAsync(
+            MetadataCandidate series,
+            int seasonNumber,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _tvBrowseCalls);
+            return episodes is null
+                ? []
+                : await episodes(series, seasonNumber, cancellationToken);
         }
 
         internal static FakeProvider WithMovie(
