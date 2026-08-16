@@ -69,17 +69,20 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         return seasons.Select(season =>
         {
-            if (season.SeasonNumber < 0 || season.EpisodeCount < 0)
+            if (season.SeasonNumber is not int seasonNumber
+                || seasonNumber < 0
+                || season.EpisodeCount is not int episodeCount
+                || episodeCount < 0)
             {
                 throw InvalidResponse("TMDB TV 시즌 정보가 올바르지 않습니다.");
             }
 
             return new TvSeasonCandidate(
-                season.SeasonNumber,
+                seasonNumber,
                 string.IsNullOrWhiteSpace(season.Name)
-                    ? $"시즌 {season.SeasonNumber}"
+                    ? $"시즌 {seasonNumber}"
                     : season.Name.Trim(),
-                season.EpisodeCount);
+                episodeCount);
         }).ToArray();
     }
 
@@ -97,8 +100,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         var response = await SendJsonAsync<TvSeasonEpisodesResponse>(
             $"tv/{seriesId}/season/{seasonNumber}?language=ko-KR",
             cancellationToken);
-        if (response.SeasonNumber < 0
-            || response.SeasonNumber != seasonNumber)
+        if (response.SeasonNumber is not int responseSeasonNumber
+            || responseSeasonNumber < 0
+            || responseSeasonNumber != seasonNumber)
         {
             throw InvalidResponse("TMDB TV 시즌 응답 번호가 올바르지 않습니다.");
         }
@@ -867,16 +871,16 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         public string? Name { get; init; }
 
         [JsonPropertyName("season_number")]
-        public int SeasonNumber { get; init; }
+        public int? SeasonNumber { get; init; }
 
         [JsonPropertyName("episode_count")]
-        public int EpisodeCount { get; init; }
+        public int? EpisodeCount { get; init; }
     }
 
     private sealed record TvSeasonEpisodesResponse
     {
         [JsonPropertyName("season_number")]
-        public int SeasonNumber { get; init; }
+        public int? SeasonNumber { get; init; }
 
         [JsonPropertyName("episodes")]
         public TvSeasonEpisodeResponse[]? Episodes { get; init; }

@@ -417,11 +417,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
                     return false;
                 }
 
+                SelectedTvSeason = season;
                 var episodes = await _getTvEpisodes(
                     candidate,
                     season.SeasonNumber,
                     linked.Token);
-                SelectedTvSeason = season;
                 TvEpisodes = episodes;
                 SetLookupStep(LookupStep.Episode);
                 var episode = _lookupHintEpisode is int episodeNumber
@@ -506,11 +506,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         IsLookupInProgress = true;
         try
         {
+            SelectedTvSeason = selected;
             var episodes = await _getTvEpisodes(
                 pending,
                 selected.SeasonNumber,
                 linked.Token);
-            SelectedTvSeason = selected;
             TvEpisodes = episodes;
             ErrorMessage = null;
             SetLookupStep(LookupStep.Episode);

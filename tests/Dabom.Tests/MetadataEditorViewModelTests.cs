@@ -1305,6 +1305,53 @@ public sealed class MetadataEditorViewModelTests
     }
 
     [TestMethod]
+    public async Task TvLookup_WhenManualEpisodeLookupFails_KeepsSelectedSeason()
+    {
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode);
+        var season = new TvSeasonCandidate(1, "Season 1", 1);
+        var editor = CreateTvLookupEditor(
+            search: _ => [series],
+            seasons: _ => [season],
+            episodes: (_, _) => throw new MetadataProviderException(
+                MetadataProviderFailureKind.InvalidResponse,
+                "invalid response"));
+        editor.SearchText = "CSI";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+        Assert.IsFalse(await editor.SelectSeasonAsync(season));
+
+        Assert.AreSame(season, editor.SelectedTvSeason);
+        Assert.AreSame(series, editor.PendingTvCandidate);
+        Assert.IsTrue(editor.IsSeasonStep);
+        Assert.IsNotNull(editor.ErrorMessage);
+    }
+
+    [TestMethod]
+    public async Task TvLookup_WhenHintEpisodeLookupFails_KeepsSelectedSeason()
+    {
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode);
+        var season = new TvSeasonCandidate(1, "Season 1", 1);
+        var editor = CreateTvLookupEditor(
+            search: _ => [series],
+            seasons: _ => [season],
+            episodes: (_, _) => throw new MetadataProviderException(
+                MetadataProviderFailureKind.InvalidResponse,
+                "invalid response"));
+        editor.SearchText = "CSI S01E01";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+
+        Assert.AreSame(season, editor.SelectedTvSeason);
+        Assert.AreSame(series, editor.PendingTvCandidate);
+        Assert.IsTrue(editor.IsSeasonStep);
+        Assert.IsNotNull(editor.ErrorMessage);
+    }
+
+    [TestMethod]
     public async Task GoBackInLookup_WhileEpisodeLookupIsRunning_KeepsSeasonStep()
     {
         var started = new TaskCompletionSource(

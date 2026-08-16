@@ -36,6 +36,23 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
+    [DataRow("{\"id\":1431,\"seasons\":[{\"name\":\"Season 1\",\"episode_count\":1}]}")]
+    [DataRow("{\"id\":1431,\"seasons\":[{\"name\":\"Season 1\",\"season_number\":1}]}")]
+    public async Task GetTvSeasonsAsync_RejectsMissingRequiredSeasonField(string response)
+    {
+        var handler = new RecordingHandler(_ => Json(response));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var error = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => provider.GetTvSeasonsAsync(
+                new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+                CancellationToken.None));
+
+        Assert.AreEqual(MetadataProviderFailureKind.InvalidResponse, error.Kind);
+    }
+
+    [TestMethod]
     public async Task GetTvEpisodesAsync_ReturnsEpisodeNamesAndAirDates()
     {
         var handler = new RecordingHandler(_ => Json("""
@@ -82,6 +99,24 @@ public sealed class TmdbMetadataProviderTests
     {
         var handler = new RecordingHandler(_ => Json("""
             {"id":99,"season_number":-1,"episodes":[]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var error = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => provider.GetTvEpisodesAsync(
+                new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+                0,
+                CancellationToken.None));
+
+        Assert.AreEqual(MetadataProviderFailureKind.InvalidResponse, error.Kind);
+    }
+
+    [TestMethod]
+    public async Task GetTvEpisodesAsync_RejectsMissingResponseSeasonNumber()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"id":99,"episodes":[]}
             """));
         using var client = new HttpClient(handler);
         var provider = new TmdbMetadataProvider(client, () => "token");
