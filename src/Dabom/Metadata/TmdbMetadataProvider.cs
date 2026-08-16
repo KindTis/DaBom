@@ -55,6 +55,67 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     public string ProviderKey => "tmdb";
 
+    public async Task<IReadOnlyList<TvSeasonCandidate>> GetTvSeasonsAsync(
+        MetadataCandidate series,
+        CancellationToken cancellationToken)
+    {
+        var seriesId = GetTvSeriesId(series);
+        var response = await SendJsonAsync<TvSeasonsResponse>(
+            $"tv/{seriesId}?language=ko-KR",
+            cancellationToken);
+        ValidateId(response.Id, seriesId, "TV 시리즈");
+        var seasons = response.Seasons
+            ?? throw InvalidResponse("TMDB TV 시즌 목록 형식이 올바르지 않습니다.");
+
+        return seasons.Select(season =>
+        {
+            if (season.SeasonNumber < 0 || season.EpisodeCount < 0)
+            {
+                throw InvalidResponse("TMDB TV 시즌 정보가 올바르지 않습니다.");
+            }
+
+            return new TvSeasonCandidate(
+                season.SeasonNumber,
+                string.IsNullOrWhiteSpace(season.Name)
+                    ? $"시즌 {season.SeasonNumber}"
+                    : season.Name.Trim(),
+                season.EpisodeCount);
+        }).ToArray();
+    }
+
+    public async Task<IReadOnlyList<TvEpisodeCandidate>> GetTvEpisodesAsync(
+        MetadataCandidate series,
+        int seasonNumber,
+        CancellationToken cancellationToken)
+    {
+        var seriesId = GetTvSeriesId(series);
+        if (seasonNumber < 0)
+        {
+            throw InvalidResponse("TMDB TV 시즌 번호가 올바르지 않습니다.");
+        }
+
+        var response = await SendJsonAsync<TvSeasonEpisodesResponse>(
+            $"tv/{seriesId}/season/{seasonNumber}?language=ko-KR",
+            cancellationToken);
+        var episodes = response.Episodes
+            ?? throw InvalidResponse("TMDB TV 에피소드 목록 형식이 올바르지 않습니다.");
+
+        return episodes.Select(episode =>
+        {
+            if (episode.EpisodeNumber < 1)
+            {
+                throw InvalidResponse("TMDB TV 에피소드 번호가 올바르지 않습니다.");
+            }
+
+            return new TvEpisodeCandidate(
+                episode.EpisodeNumber,
+                string.IsNullOrWhiteSpace(episode.Name)
+                    ? $"{episode.EpisodeNumber}화"
+                    : episode.Name.Trim(),
+                ParseDate(episode.AirDate));
+        }).ToArray();
+    }
+
     public async Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
         MetadataQuery query,
         CancellationToken cancellationToken)
@@ -663,6 +724,23 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         throw InvalidResponse("TMDB 날짜 형식이 올바르지 않습니다.");
     }
 
+    private int GetTvSeriesId(MetadataCandidate series)
+    {
+        if (!string.Equals(series.ProviderKey, ProviderKey, StringComparison.Ordinal)
+            || series.ResourceType != "tv-series"
+            || !int.TryParse(
+                series.ResourceId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var id)
+            || id <= 0)
+        {
+            throw InvalidResponse("TMDB TV 시리즈 후보 참조가 올바르지 않습니다.");
+        }
+
+        return id;
+    }
+
     private static void ValidateId(int actual, int expected, string resource)
     {
         if (actual != expected || actual <= 0)
@@ -767,6 +845,45 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         [JsonPropertyName("poster_path")]
         public string? PosterPath { get; init; }
+    }
+
+    private sealed record TvSeasonsResponse
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; init; }
+
+        [JsonPropertyName("seasons")]
+        public TvSeasonResponse[]? Seasons { get; init; }
+    }
+
+    private sealed record TvSeasonResponse
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("season_number")]
+        public int SeasonNumber { get; init; }
+
+        [JsonPropertyName("episode_count")]
+        public int EpisodeCount { get; init; }
+    }
+
+    private sealed record TvSeasonEpisodesResponse
+    {
+        [JsonPropertyName("episodes")]
+        public TvSeasonEpisodeResponse[]? Episodes { get; init; }
+    }
+
+    private sealed record TvSeasonEpisodeResponse
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("episode_number")]
+        public int EpisodeNumber { get; init; }
+
+        [JsonPropertyName("air_date")]
+        public string? AirDate { get; init; }
     }
 
     private sealed record TvEpisodeDetailsResponse

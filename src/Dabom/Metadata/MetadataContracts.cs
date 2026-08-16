@@ -21,6 +21,16 @@ public sealed record MetadataCandidate(
     int? Year = null,
     Uri? PosterUri = null);
 
+public sealed record TvSeasonCandidate(
+    int SeasonNumber,
+    string Name,
+    int EpisodeCount);
+
+public sealed record TvEpisodeCandidate(
+    int EpisodeNumber,
+    string Name,
+    DateOnly? AirDate);
+
 public enum MetadataProviderFailureKind
 {
     Authentication,
@@ -72,4 +82,15 @@ public interface IMetadataProvider
     Task<MetadataDetails> GetDetailsAsync(
         MetadataCandidate candidate,
         CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<TvSeasonCandidate>> GetTvSeasonsAsync(
+        MetadataCandidate series,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<TvSeasonCandidate>>([]);
+
+    Task<IReadOnlyList<TvEpisodeCandidate>> GetTvEpisodesAsync(
+        MetadataCandidate series,
+        int seasonNumber,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<TvEpisodeCandidate>>([]);
 }

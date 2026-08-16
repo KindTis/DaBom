@@ -13,6 +13,53 @@ namespace Dabom.Tests;
 public sealed class TmdbMetadataProviderTests
 {
     [TestMethod]
+    public async Task GetTvSeasonsAsync_ReturnsProviderSeasonNamesIncludingZero()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"id":1431,"seasons":[
+              {"name":"Specials","season_number":0,"episode_count":12},
+              {"name":"시즌 1","season_number":1,"episode_count":23}
+            ]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var seasons = await provider.GetTvSeasonsAsync(
+            new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+            CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "0:Specials:12", "1:시즌 1:23" },
+            seasons.Select(value =>
+                $"{value.SeasonNumber}:{value.Name}:{value.EpisodeCount}").ToArray());
+        Assert.AreEqual("/3/tv/1431?language=ko-KR", handler.Requests.Single().Uri.PathAndQuery);
+    }
+
+    [TestMethod]
+    public async Task GetTvEpisodesAsync_ReturnsEpisodeNamesAndAirDates()
+    {
+        var handler = new RecordingHandler(_ => Json("""
+            {"id":99,"season_number":0,"episodes":[
+              {"id":100,"name":"특별편","episode_number":1,"air_date":"2001-01-01"}
+            ]}
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var episodes = await provider.GetTvEpisodesAsync(
+            new("tmdb", "tv-series", "1431", MediaType.TvEpisode),
+            0,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, episodes.Single().EpisodeNumber);
+        Assert.AreEqual("특별편", episodes.Single().Name);
+        Assert.AreEqual(new DateOnly(2001, 1, 1), episodes.Single().AirDate);
+        Assert.AreEqual(
+            "/3/tv/1431/season/0?language=ko-KR",
+            handler.Requests.Single().Uri.PathAndQuery);
+    }
+
+    [TestMethod]
     public async Task SearchMovieAsync_UsesBearerKoreanQueryAndYear()
     {
         var handler = new RecordingHandler(_ => Json("""
