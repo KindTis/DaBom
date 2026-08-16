@@ -552,21 +552,29 @@ public partial class MainWindow : Window
         if (e.Key == Key.Delete)
         {
             e.Handled = true;
-            if (viewModel.SelectedItem is SeasonItemViewModel)
-            {
-                viewModel.RequestSeasonDeletionGuidance();
-                return;
-            }
+            var selectedItems = VideoList.Items.Cast<LibraryItemViewModel>()
+                .Where(item => VideoList.SelectedItems.Contains(item))
+                .ToArray();
+            var preparation = viewModel.PrepareVideoDeletions(selectedItems);
+            if (preparation is null) return;
 
-            var request = viewModel.PrepareVideoDeletion();
-            if (request is null) return;
-            var confirmation = new VideoDeletionConfirmationWindow([request], 0)
+            var confirmation = new VideoDeletionConfirmationWindow(
+                preparation.Requests,
+                preparation.Failures.Count)
             {
                 Owner = this
             };
-            if (confirmation.ShowDialog() == true)
+            if (confirmation.ShowDialog() != true) return;
+
+            var result = await viewModel.DeleteVideosAsync(preparation);
+            var failedVideos = result.FailedVideos.ToHashSet();
+            VideoList.UnselectAll();
+            foreach (var video in selectedItems.OfType<VideoItemViewModel>()
+                .Where(video =>
+                    failedVideos.Contains(video)
+                    && VideoList.Items.Contains(video)))
             {
-                await viewModel.DeleteVideoAsync(request);
+                VideoList.SelectedItems.Add(video);
             }
             return;
         }

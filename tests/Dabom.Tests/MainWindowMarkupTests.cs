@@ -287,26 +287,38 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
-    public void DeleteKey_PreparesAndConfirmsVideoDeletionWithoutGlobalHandling()
+    public void DeleteKey_SnapshotsDisplayOrderAndReselectsOnlyFailedVideos()
     {
         var code = ReadMainWindowCode();
-        var viewModel = ReadMainViewModelCode();
-        var handler = MethodBody(code, "private async void OnVideoListKeyDown", "private void OnReturnToLibrary");
-        var preview = MethodBody(code, "private void OnPreviewKeyDown", "private void OnMainScrollChanged");
+        var handler = MethodBody(
+            code,
+            "private async void OnVideoListKeyDown",
+            "private void OnReturnToLibrary");
+        var preview = MethodBody(
+            code,
+            "private void OnPreviewKeyDown",
+            "private void OnMainScrollChanged");
 
         StringAssert.Contains(handler, "e.Key == Key.Delete");
-        StringAssert.Contains(handler, "viewModel.RequestSeasonDeletionGuidance();");
-        StringAssert.Contains(handler, "PrepareVideoDeletion()");
-        StringAssert.Contains(handler, "new VideoDeletionConfirmationWindow([request], 0)");
-        StringAssert.Contains(handler, "Owner = this");
-        StringAssert.Contains(handler, "ShowDialog() == true");
-        StringAssert.Contains(handler, "await viewModel.DeleteVideoAsync(request)");
-        Assert.IsFalse(handler.Contains("MessageBox.Show", StringComparison.Ordinal));
-        Assert.IsFalse(handler.Contains("request.Video.Path", StringComparison.Ordinal));
-        StringAssert.Contains(viewModel, "internal void RequestSeasonDeletionGuidance() =>");
-        StringAssert.Contains(
-            viewModel,
-            "TV 시즌은 한 번에 삭제할 수 없습니다. 시즌을 열고 개별 영상을 선택하세요.");
+        StringAssert.Contains(handler, "VideoList.Items.Cast<LibraryItemViewModel>()");
+        StringAssert.Contains(handler, "VideoList.SelectedItems.Contains(item)");
+        StringAssert.Contains(handler, "PrepareVideoDeletions(selectedItems)");
+        StringAssert.Contains(handler, "preparation.Requests");
+        StringAssert.Contains(handler, "preparation.Failures.Count");
+        StringAssert.Contains(handler, "ShowDialog() != true");
+        StringAssert.Contains(handler, "await viewModel.DeleteVideosAsync(preparation)");
+        StringAssert.Contains(handler, "VideoList.UnselectAll();");
+        StringAssert.Contains(handler, "selectedItems.OfType<VideoItemViewModel>()");
+        StringAssert.Contains(handler, "result.FailedVideos.ToHashSet()");
+        StringAssert.Contains(handler, "failedVideos.Contains(video)");
+        StringAssert.Contains(handler, "VideoList.Items.Contains(video)");
+        StringAssert.Contains(handler, "VideoList.SelectedItems.Add(video);");
+        Assert.IsTrue(
+            handler.IndexOf("ShowDialog() != true", StringComparison.Ordinal)
+            < handler.IndexOf("VideoList.UnselectAll();", StringComparison.Ordinal),
+            "취소 반환은 선택 해제보다 먼저여야 합니다.");
+        Assert.IsFalse(handler.Contains("PrepareVideoDeletion()", StringComparison.Ordinal));
+        Assert.IsFalse(handler.Contains("DeleteVideoAsync(", StringComparison.Ordinal));
         Assert.IsFalse(preview.Contains("Key.Delete", StringComparison.Ordinal));
     }
 

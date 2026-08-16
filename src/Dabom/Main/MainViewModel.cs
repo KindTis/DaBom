@@ -871,11 +871,6 @@ public sealed class MainViewModel : ViewModelBase
         VideoDeletionFailureKind.FileStatus,
         $"“{video.FileName}”: 파일 상태가 변경되어 삭제하지 못했습니다. 다시 시도하세요.");
 
-    internal VideoDeletionRequest? PrepareVideoDeletion() =>
-        SelectedVideo is null
-            ? null
-            : PrepareVideoDeletions([SelectedVideo])?.Requests.SingleOrDefault();
-
     internal async Task<VideoDeletionResult> DeleteVideosAsync(
         VideoDeletionPreparation preparation)
     {
@@ -970,12 +965,6 @@ public sealed class MainViewModel : ViewModelBase
         _data = next;
         RemoveVideoFromScreen(request.Video);
         return null;
-    }
-
-    internal async Task<bool> DeleteVideoAsync(VideoDeletionRequest request)
-    {
-        var result = await DeleteVideosAsync(new([request], []));
-        return result.DeletedCount == 1;
     }
 
     public async Task PlayAsync(VideoItemViewModel video)
