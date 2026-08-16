@@ -733,17 +733,17 @@ public sealed class MetadataEditorViewModelTests
 
         editor.Title = "사용자 입력 유지";
         var hadSelectedResult = editor.HasSelectedResult;
-        editor.SeasonNumberText = "0";
+        editor.SeasonNumberText = "-1";
         editor.EpisodeNumberText = "3";
         Assert.IsFalse(editor.CanApplyTvEpisode);
         Assert.IsFalse(await editor.ApplyTvEpisodeAsync());
         Assert.IsNull(requested);
         Assert.AreEqual(
-            "시즌과 에피소드 번호에 1 이상의 정수를 입력하세요.",
+            "시즌 번호에는 0 이상, 에피소드 번호에는 1 이상의 정수를 입력하세요.",
             editor.ErrorMessage);
         Assert.IsTrue(editor.IsSearchPopupOpen);
         Assert.AreSame(candidate, editor.PendingTvCandidate);
-        Assert.AreEqual("0", editor.SeasonNumberText);
+        Assert.AreEqual("-1", editor.SeasonNumberText);
         Assert.AreEqual("3", editor.EpisodeNumberText);
         Assert.AreEqual("사용자 입력 유지", editor.Title);
         Assert.AreEqual(hadSelectedResult, editor.HasSelectedResult);
@@ -1029,9 +1029,9 @@ public sealed class MetadataEditorViewModelTests
         Assert.AreEqual("3", editor.EpisodeNumberText);
 
         editor.SeasonNumberText = "0";
-        Assert.AreEqual("직접 제목", editor.Title);
+        Assert.AreEqual("시리즈 S00E03 · 회차", editor.Title);
         editor.SeriesTitle = "새 시리즈";
-        Assert.AreEqual("직접 제목", editor.Title);
+        Assert.AreEqual("새 시리즈 S00E03 · 회차", editor.Title);
         editor.SeasonNumberText = "4";
         Assert.AreEqual("새 시리즈 S04E03 · 회차", editor.Title);
 
@@ -1221,6 +1221,125 @@ public sealed class MetadataEditorViewModelTests
             },
             committed.UserEditedFields.ToArray());
     }
+
+    [TestMethod]
+    public async Task TvLookup_TitleOnlyBrowsesSeasonZeroAndEpisode()
+    {
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode,
+            DisplayTitle: "CSI");
+        var editor = CreateTvLookupEditor(
+            search: _ => [series],
+            seasons: _ => [new(0, "Specials", 1)],
+            episodes: (_, season) => season == 0
+                ? [new(1, "특별편", new DateOnly(2001, 1, 1))]
+                : []);
+        editor.SearchText = "CSI";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+        Assert.IsTrue(editor.IsSeasonStep);
+        Assert.AreEqual(0, editor.TvSeasons.Single().SeasonNumber);
+        Assert.IsFalse(await editor.SelectSeasonAsync(editor.TvSeasons.Single()));
+        Assert.IsTrue(editor.IsEpisodeStep);
+        Assert.IsTrue(await editor.SelectEpisodeAsync(editor.TvEpisodes.Single()));
+        Assert.AreEqual("0", editor.SeasonNumberText);
+        Assert.AreEqual("1", editor.EpisodeNumberText);
+        Assert.IsTrue(await editor.SaveAsync());
+    }
+
+    [TestMethod]
+    public async Task TvLookup_ExactSuffixSearchesTitleAndAutomaticallyAppliesEpisode()
+    {
+        string? searched = null;
+        MetadataCandidate? requested = null;
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode,
+            DisplayTitle: "CSI");
+        var editor = CreateTvLookupEditor(
+            search: title => { searched = title; return [series]; },
+            seasons: _ => [new(1, "Season 1", 23)],
+            episodes: (_, _) => [new(1, "Pilot", new DateOnly(2000, 10, 6))],
+            onDetails: candidate => requested = candidate);
+        editor.SearchText = "CSI: Crime Scene Investigation S01 E01";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.AreEqual("CSI: Crime Scene Investigation", searched);
+        Assert.AreEqual("조회할 회차: S01E01", editor.LookupHintText);
+        Assert.IsTrue(await editor.SelectCandidateAsync(series));
+        Assert.AreEqual(1, requested?.SeasonNumber);
+        Assert.AreEqual(1, requested?.EpisodeNumber);
+    }
+
+    [TestMethod]
+    public async Task TvLookup_MissingHintFallsBackToClosestSelectionStep()
+    {
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode);
+        var editor = CreateTvLookupEditor(
+            search: _ => [series],
+            seasons: _ => [new(0, "Specials", 1)],
+            episodes: (_, _) => []);
+        editor.SearchText = "CSI S01E01";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+        Assert.IsTrue(editor.IsSeasonStep);
+    }
+
+    [TestMethod]
+    public async Task TvLookup_MissingHintEpisodeFallsBackToEpisodeStep()
+    {
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode);
+        var editor = CreateTvLookupEditor(
+            search: _ => [series],
+            seasons: _ => [new(1, "Season 1", 1)],
+            episodes: (_, _) => [new(2, "Second", new DateOnly(2000, 10, 13))]);
+        editor.SearchText = "CSI S01E01";
+
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+        Assert.IsTrue(editor.IsEpisodeStep);
+        Assert.AreEqual(2, editor.TvEpisodes.Single().EpisodeNumber);
+    }
+
+    private static MetadataEditorViewModel CreateTvLookupEditor(
+        Func<string, IReadOnlyList<MetadataCandidate>> search,
+        Func<MetadataCandidate, IReadOnlyList<TvSeasonCandidate>> seasons,
+        Func<MetadataCandidate, int, IReadOnlyList<TvEpisodeCandidate>> episodes,
+        Action<MetadataCandidate>? onDetails = null) =>
+        new(
+            @"D:\Episode.mkv",
+            new VideoRecord(),
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (title, _) => Task.FromResult(search(title)),
+            (candidate, _) =>
+            {
+                onDetails?.Invoke(candidate);
+                return Task.FromResult(new MetadataDetails(
+                    MediaType: MediaType.TvEpisode,
+                    Title: null,
+                    OriginalTitle: "Series",
+                    SeriesTitle: "시리즈",
+                    EpisodeTitle: "회차",
+                    ReleaseDate: new DateOnly(2001, 1, 1),
+                    Genres: [],
+                    Director: null,
+                    Actors: [],
+                    Synopsis: null,
+                    SeasonNumber: candidate.SeasonNumber,
+                    EpisodeNumber: candidate.EpisodeNumber,
+                    PosterUri: null,
+                    ProviderReferences:
+                    [
+                        new("test", "tv-series", "1431"),
+                        new("test", "tv-episode", "100")
+                    ]));
+            },
+            (series, _) => Task.FromResult(seasons(series)),
+            (series, season, _) => Task.FromResult(episodes(series, season)));
 
     private static MetadataDetails MovieDetails(string title, string id) => new(
         MediaType: MediaType.Movie,

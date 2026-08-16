@@ -1,6 +1,7 @@
 using Dabom.Library;
 using Dabom.Main;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Windows.Media.Imaging;
 
 namespace Dabom.Metadata;
@@ -12,9 +13,20 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         Task<IReadOnlyList<MetadataCandidate>>>? _search;
     private readonly Func<MetadataCandidate, CancellationToken,
         Task<MetadataDetails>>? _getDetails;
+    private readonly Func<MetadataCandidate, CancellationToken,
+        Task<IReadOnlyList<TvSeasonCandidate>>>? _getTvSeasons;
+    private readonly Func<MetadataCandidate, int, CancellationToken,
+        Task<IReadOnlyList<TvEpisodeCandidate>>>? _getTvEpisodes;
     private readonly CancellationTokenSource _lookupCancellation = new();
     private IReadOnlyList<MetadataCandidate> _searchCandidates = [];
+    private IReadOnlyList<TvSeasonCandidate> _tvSeasons = [];
+    private IReadOnlyList<TvEpisodeCandidate> _tvEpisodes = [];
     private MetadataCandidate? _pendingTvCandidate;
+    private TvSeasonCandidate? _selectedTvSeason;
+    private LookupStep _lookupStep;
+    private int? _lookupHintSeason;
+    private int? _lookupHintEpisode;
+    private string? _lookupHintText;
     private VideoRecord? _selectedBaseline;
     private Uri? _selectedPosterUri;
     private string _searchText;
@@ -44,7 +56,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         Func<string, CancellationToken,
             Task<IReadOnlyList<MetadataCandidate>>>? search = null,
         Func<MetadataCandidate, CancellationToken,
-            Task<MetadataDetails>>? getDetails = null)
+            Task<MetadataDetails>>? getDetails = null,
+        Func<MetadataCandidate, CancellationToken,
+            Task<IReadOnlyList<TvSeasonCandidate>>>? getTvSeasons = null,
+        Func<MetadataCandidate, int, CancellationToken,
+            Task<IReadOnlyList<TvEpisodeCandidate>>>? getTvEpisodes = null)
     {
         Path = path;
         OriginalRecord = record;
@@ -52,6 +68,8 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         _commit = commit;
         _search = search;
         _getDetails = getDetails;
+        _getTvSeasons = getTvSeasons;
+        _getTvEpisodes = getTvEpisodes;
         _mediaType = record.MediaType;
         _seriesTitle = record.SeriesTitle ?? string.Empty;
         _episodeTitle = record.EpisodeTitle ?? string.Empty;
@@ -147,6 +165,34 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         private set => Set(ref _searchCandidates, value);
     }
 
+    public IReadOnlyList<TvSeasonCandidate> TvSeasons
+    {
+        get => _tvSeasons;
+        private set => Set(ref _tvSeasons, value);
+    }
+
+    public IReadOnlyList<TvEpisodeCandidate> TvEpisodes
+    {
+        get => _tvEpisodes;
+        private set => Set(ref _tvEpisodes, value);
+    }
+
+    public TvSeasonCandidate? SelectedTvSeason
+    {
+        get => _selectedTvSeason;
+        private set => Set(ref _selectedTvSeason, value);
+    }
+
+    public bool IsSearchResultStep => _lookupStep == LookupStep.SearchResult;
+    public bool IsSeasonStep => _lookupStep == LookupStep.Season;
+    public bool IsEpisodeStep => _lookupStep == LookupStep.Episode;
+
+    public string? LookupHintText
+    {
+        get => _lookupHintText;
+        private set => Set(ref _lookupHintText, value);
+    }
+
     public MetadataCandidate? PendingTvCandidate
     {
         get => _pendingTvCandidate;
@@ -214,7 +260,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
 
     public bool CanApplyTvEpisode =>
         PendingTvCandidate is not null
-        && TryPositiveNumber(SeasonNumberText, out _)
+        && TryNonNegativeNumber(SeasonNumberText, out _)
         && TryPositiveNumber(EpisodeNumberText, out _);
 
     public bool IsNotBusy => !IsSaving && !IsLookupInProgress;
@@ -280,9 +326,36 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         IsLookupInProgress = true;
         try
         {
-            var candidates = await _search(SearchText.Trim(), linked.Token);
+            var searchText = SearchText.Trim();
+            var hint = LookupHintPattern.Match(searchText);
+            var hintSeason = 0;
+            var hintEpisode = 0;
+            var hasHint = hint.Success
+                && int.TryParse(
+                    hint.Groups["season"].Value,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out hintSeason)
+                && int.TryParse(
+                    hint.Groups["episode"].Value,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out hintEpisode);
+            var title = hasHint
+                ? hint.Groups["title"].Value.TrimEnd()
+                : searchText;
+            var candidates = await _search(title, linked.Token);
             SearchCandidates = candidates;
             PendingTvCandidate = null;
+            TvSeasons = [];
+            TvEpisodes = [];
+            SelectedTvSeason = null;
+            _lookupHintSeason = hasHint ? hintSeason : null;
+            _lookupHintEpisode = hasHint ? hintEpisode : null;
+            LookupHintText = hasHint
+                ? $"조회할 회차: S{_lookupHintSeason:00}E{_lookupHintEpisode:00}"
+                : null;
+            SetLookupStep(LookupStep.SearchResult);
             IsSearchPopupOpen = true;
             ErrorMessage = candidates.Count == 0
                 ? "검색 결과가 없습니다"
@@ -314,9 +387,72 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         }
         if (candidate.MediaType == MediaType.TvEpisode)
         {
-            PendingTvCandidate = candidate;
-            ErrorMessage = null;
-            return false;
+            if (_getTvSeasons is null)
+            {
+                PendingTvCandidate = candidate;
+                ErrorMessage = null;
+                SetLookupStep(LookupStep.Season);
+                return false;
+            }
+
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _lookupCancellation.Token);
+            IsLookupInProgress = true;
+            try
+            {
+                var seasons = await _getTvSeasons(candidate, linked.Token);
+                PendingTvCandidate = candidate;
+                TvSeasons = seasons;
+                TvEpisodes = [];
+                SelectedTvSeason = null;
+                ErrorMessage = null;
+                SetLookupStep(LookupStep.Season);
+
+                var season = _lookupHintSeason is int seasonNumber
+                    ? seasons.FirstOrDefault(value => value.SeasonNumber == seasonNumber)
+                    : null;
+                if (season is null || _getTvEpisodes is null)
+                {
+                    return false;
+                }
+
+                var episodes = await _getTvEpisodes(
+                    candidate,
+                    season.SeasonNumber,
+                    linked.Token);
+                SelectedTvSeason = season;
+                TvEpisodes = episodes;
+                SetLookupStep(LookupStep.Episode);
+                var episode = _lookupHintEpisode is int episodeNumber
+                    ? episodes.FirstOrDefault(value => value.EpisodeNumber == episodeNumber)
+                    : null;
+                if (episode is null || _getDetails is null)
+                {
+                    return false;
+                }
+
+                return ApplyDetails(await _getDetails(
+                    candidate with
+                    {
+                        SeasonNumber = season.SeasonNumber,
+                        EpisodeNumber = episode.EpisodeNumber
+                    },
+                    linked.Token));
+            }
+            catch (MetadataProviderException error)
+            {
+                ErrorMessage = LookupError(error.Kind);
+                return false;
+            }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested)
+            {
+                return false;
+            }
+            finally
+            {
+                IsLookupInProgress = false;
+            }
         }
 
         return await LoadDetailsAsync(candidate, cancellationToken);
@@ -330,11 +466,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             return false;
         }
         if (PendingTvCandidate is not { } pending
-            || !TryPositiveNumber(SeasonNumberText, out var seasonNumber)
+            || !TryNonNegativeNumber(SeasonNumberText, out var seasonNumber)
             || !TryPositiveNumber(EpisodeNumberText, out var episodeNumber))
         {
             ErrorMessage =
-                "시즌과 에피소드 번호에 1 이상의 정수를 입력하세요.";
+                "시즌 번호에는 0 이상, 에피소드 번호에는 1 이상의 정수를 입력하세요.";
             return false;
         }
 
@@ -344,6 +480,92 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             EpisodeNumber = episodeNumber
         };
         return await LoadDetailsAsync(candidate, cancellationToken);
+    }
+
+    public async Task<bool> SelectSeasonAsync(
+        TvSeasonCandidate season,
+        CancellationToken cancellationToken = default)
+    {
+        if (IsSaving || IsLookupInProgress
+            || PendingTvCandidate is not { } pending
+            || _getTvEpisodes is null)
+        {
+            return false;
+        }
+
+        var selected = TvSeasons.FirstOrDefault(
+            value => value.SeasonNumber == season.SeasonNumber);
+        if (selected is null)
+        {
+            return false;
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lookupCancellation.Token);
+        IsLookupInProgress = true;
+        try
+        {
+            var episodes = await _getTvEpisodes(
+                pending,
+                selected.SeasonNumber,
+                linked.Token);
+            SelectedTvSeason = selected;
+            TvEpisodes = episodes;
+            ErrorMessage = null;
+            SetLookupStep(LookupStep.Episode);
+            return false;
+        }
+        catch (MetadataProviderException error)
+        {
+            ErrorMessage = LookupError(error.Kind);
+            return false;
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+            return false;
+        }
+        finally
+        {
+            IsLookupInProgress = false;
+        }
+    }
+
+    public Task<bool> SelectEpisodeAsync(
+        TvEpisodeCandidate episode,
+        CancellationToken cancellationToken = default)
+    {
+        if (IsSaving || IsLookupInProgress
+            || PendingTvCandidate is not { } pending
+            || SelectedTvSeason is not { } season
+            || !TvEpisodes.Any(value => value.EpisodeNumber == episode.EpisodeNumber))
+        {
+            return Task.FromResult(false);
+        }
+
+        return LoadDetailsAsync(
+            pending with
+            {
+                SeasonNumber = season.SeasonNumber,
+                EpisodeNumber = episode.EpisodeNumber
+            },
+            cancellationToken);
+    }
+
+    public void GoBackInLookup()
+    {
+        if (IsEpisodeStep)
+        {
+            SelectedTvSeason = null;
+            TvEpisodes = [];
+            SetLookupStep(LookupStep.Season);
+        }
+        else if (IsSeasonStep)
+        {
+            PendingTvCandidate = null;
+            TvSeasons = [];
+            SetLookupStep(LookupStep.SearchResult);
+        }
     }
 
     public async Task<bool> SaveAsync(
@@ -357,7 +579,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             && !TryReadTvDraft(out _, out _, out _))
         {
             TvValidationMessage =
-                "시리즈명과 시즌·에피소드 번호에 1 이상의 정수를 입력하세요.";
+                "시리즈명과 시즌 번호(0 이상), 에피소드 번호(1 이상)를 입력하세요.";
             return false;
         }
         IsSaving = true;
@@ -395,7 +617,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             ? NullIfWhiteSpace(EpisodeTitle)
             : baseline.EpisodeTitle;
         int? seasonNumber = IsTvEpisode
-            ? TryPositiveNumber(SeasonNumberText, out var parsedSeason)
+            ? TryNonNegativeNumber(SeasonNumberText, out var parsedSeason)
                 ? parsedSeason
                 : null
             : baseline.SeasonNumber;
@@ -551,7 +773,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
     {
         if (details.MediaType == MediaType.TvEpisode
             && (string.IsNullOrWhiteSpace(details.SeriesTitle)
-                || details.SeasonNumber is not > 0
+                || details.SeasonNumber is null or < 0
                 || details.EpisodeNumber is not > 0))
         {
             TvValidationMessage =
@@ -613,6 +835,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         PreviewPoster = details.PosterUri;
         PendingTvCandidate = null;
         IsSearchPopupOpen = false;
+        SetLookupStep(LookupStep.None);
         ErrorMessage = null;
         return true;
     }
@@ -645,9 +868,17 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         episodeNumber = 0;
         return IsTvEpisode
             && !string.IsNullOrWhiteSpace(seriesTitle)
-            && TryPositiveNumber(SeasonNumberText, out seasonNumber)
+            && TryNonNegativeNumber(SeasonNumberText, out seasonNumber)
             && TryPositiveNumber(EpisodeNumberText, out episodeNumber);
     }
+
+    private static bool TryNonNegativeNumber(string value, out int number) =>
+        int.TryParse(
+            value,
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out number)
+        && number >= 0;
 
     private static bool TryPositiveNumber(string value, out int number) =>
         int.TryParse(
@@ -663,6 +894,23 @@ public sealed class MetadataEditorViewModel : ViewModelBase
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private void SetLookupStep(LookupStep step)
+    {
+        if (_lookupStep == step)
+        {
+            return;
+        }
+
+        _lookupStep = step;
+        Raise(nameof(IsSearchResultStep));
+        Raise(nameof(IsSeasonStep));
+        Raise(nameof(IsEpisodeStep));
+    }
+
+    private static readonly Regex LookupHintPattern = new(
+        @"^(?<title>.+?)\s+S(?<season>[0-9]+)\s*E(?<episode>[0-9]+)\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static string LookupError(MetadataProviderFailureKind kind) =>
         kind switch
         {
@@ -672,4 +920,12 @@ public sealed class MetadataEditorViewModel : ViewModelBase
                 "온라인 메타데이터 조회에 실패했습니다. 잠시 후 다시 시도하세요.",
             _ => "메타데이터 응답을 처리하지 못했습니다. 다시 시도하세요."
         };
+
+    private enum LookupStep
+    {
+        None,
+        SearchResult,
+        Season,
+        Episode
+    }
 }

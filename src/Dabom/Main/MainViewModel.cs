@@ -1051,7 +1051,13 @@ public sealed class MainViewModel : ViewModelBase
                     : _metadataEnrichment.SearchManualAsync,
                 _metadataEnrichment is null
                     ? null
-                    : _metadataEnrichment.GetManualDetailsAsync);
+                    : _metadataEnrichment.GetManualDetailsAsync,
+                _metadataEnrichment is null
+                    ? null
+                    : _metadataEnrichment.GetManualTvSeasonsAsync,
+                _metadataEnrichment is null
+                    ? null
+                    : _metadataEnrichment.GetManualTvEpisodesAsync);
 
     private async Task<string?> CommitMetadataAsync(
         MetadataEditorViewModel editor,
