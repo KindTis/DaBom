@@ -204,19 +204,24 @@ public partial class MetadataWindow : Window
 
     private async Task FocusFirstItemAsync(ListBox list)
     {
-        if (list.Items.Count == 0)
-        {
-            return;
-        }
-
         await Dispatcher.BeginInvoke(
             DispatcherPriority.Input,
             () =>
             {
+                if (list.Items.Count == 0)
+                {
+                    list.Focus();
+                    return;
+                }
+
                 list.SelectedIndex = 0;
                 if (list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem item)
                 {
                     item.Focus();
+                }
+                else
+                {
+                    list.Focus();
                 }
             });
     }

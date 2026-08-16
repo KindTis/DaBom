@@ -1317,7 +1317,7 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
-    public void MetadataWindow_SearchPopupShowsCandidateAndEpisodeInputs()
+    public void MetadataWindow_SearchPopupShowsCandidateSeasonAndEpisodeLists()
     {
         var markup = ReadMetadataWindowMarkup();
 
@@ -1327,10 +1327,15 @@ public sealed class MainWindowMarkupTests
         StringAssert.Contains(markup, "Text=\"{Binding Year}\"");
         StringAssert.Contains(markup, "Value=\"영화\"");
         StringAssert.Contains(markup, "Value=\"TV\"");
-        StringAssert.Contains(markup, "x:Name=\"SeasonNumberBox\"");
-        StringAssert.Contains(markup, "x:Name=\"EpisodeNumberBox\"");
-        StringAssert.Contains(markup, "Content=\"회차 적용\"");
-        StringAssert.Contains(markup, "IsEnabled=\"{Binding CanApplyTvEpisode}\"");
+        StringAssert.Contains(markup, "Text=\"{Binding LookupHintText}\"");
+        StringAssert.Contains(markup, "x:Name=\"TvSeasonsList\"");
+        StringAssert.Contains(markup, "ItemsSource=\"{Binding TvSeasons}\"");
+        StringAssert.Contains(markup, "x:Name=\"TvEpisodesList\"");
+        StringAssert.Contains(markup, "ItemsSource=\"{Binding TvEpisodes}\"");
+        StringAssert.Contains(markup, "Content=\"← 이전\"");
+        Assert.IsFalse(markup.Contains("x:Name=\"SeasonNumberBox\""));
+        Assert.IsFalse(markup.Contains("x:Name=\"EpisodeNumberBox\""));
+        Assert.IsFalse(markup.Contains("Content=\"회차 적용\""));
     }
 
     [TestMethod]
@@ -1341,14 +1346,21 @@ public sealed class MainWindowMarkupTests
 
         StringAssert.Contains(markup, "KeyDown=\"OnSearchKeyDown\"");
         StringAssert.Contains(markup, "KeyDown=\"OnSearchResultsKeyDown\"");
-        StringAssert.Contains(markup, "KeyDown=\"OnEpisodeKeyDown\"");
+        StringAssert.Contains(markup, "PreviewMouseLeftButtonUp=\"OnSeasonClick\"");
+        StringAssert.Contains(markup, "KeyDown=\"OnSeasonsKeyDown\"");
+        StringAssert.Contains(markup, "PreviewMouseLeftButtonUp=\"OnEpisodeClick\"");
+        StringAssert.Contains(markup, "KeyDown=\"OnEpisodesKeyDown\"");
+        StringAssert.Contains(markup, "Click=\"OnLookupBack\"");
         StringAssert.Contains(markup, "PreviewKeyDown=\"OnPopupKeyDown\"");
-        StringAssert.Contains(code, "SearchResultsList.SelectedIndex = 0;");
+        StringAssert.Contains(code, "list.SelectedIndex = 0;");
+        StringAssert.Contains(code, "list.Focus();");
         StringAssert.Contains(
             code,
             "if (viewModel.SearchCandidates.Count == 0)");
         StringAssert.Contains(code, "SearchBox.Focus();");
-        StringAssert.Contains(code, "SeasonNumberBox.Focus();");
+        StringAssert.Contains(code, "SelectSeasonAsync(season)");
+        StringAssert.Contains(code, "SelectEpisodeAsync(episode)");
+        StringAssert.Contains(code, "viewModel.GoBackInLookup();");
         StringAssert.Contains(code, "TitleBox.Focus();");
         StringAssert.Contains(code, "e.Key == Key.Escape");
         StringAssert.Contains(code, "viewModel.IsSearchPopupOpen = false;");
