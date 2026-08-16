@@ -111,7 +111,9 @@ public sealed class MainViewModel : ViewModelBase
                 var editor = CreateMetadataEditor();
                 if (editor is not null) MetadataEditRequested?.Invoke(this, editor);
             },
-            _ => CanMutateLibrary && SelectedVideo is not null);
+            _ => CanMutateLibrary
+                && SelectedItemCount == 1
+                && SelectedVideo is not null);
         RemoveLocationCommand = new RelayCommand(
             path => _ = RemoveLocationAsync((string)path!),
             path => CanMutateLibrary && path is string);
@@ -894,7 +896,7 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     public MetadataEditorViewModel? CreateMetadataEditor() =>
-        SelectedVideo is null || !CanMutateLibrary
+        SelectedItemCount != 1 || SelectedVideo is null || !CanMutateLibrary
             ? null
             : new MetadataEditorViewModel(
                 SelectedVideo.Path,

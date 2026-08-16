@@ -298,6 +298,40 @@ public sealed class CommandStateTests
         }
     }
 
+    [TestMethod]
+    public async Task MetadataEditing_RequiresExactlyOneSelectedVideo()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-command-multi-selection-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var viewModel = CreateViewModel(
+                new LibraryStore(root.FullName),
+                new ImmediateScanner(path),
+                CachedData(root.FullName, path));
+            await viewModel.ScanAsync();
+            viewModel.SelectedVideo = viewModel.Videos.Single();
+
+            Assert.AreEqual(1, viewModel.SelectedItemCount);
+            Assert.IsTrue(viewModel.OpenMetadataCommand.CanExecute(null));
+            Assert.IsNotNull(viewModel.CreateMetadataEditor());
+
+            viewModel.UpdateSelectedItemCount(2);
+
+            Assert.IsFalse(viewModel.OpenMetadataCommand.CanExecute(null));
+            Assert.IsNull(viewModel.CreateMetadataEditor());
+
+            viewModel.UpdateSelectedItemCount(1);
+
+            Assert.IsTrue(viewModel.OpenMetadataCommand.CanExecute(null));
+            Assert.IsNotNull(viewModel.CreateMetadataEditor());
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
     private static void AssertCommandsDisabled(MainViewModel vm, string location)
     {
         Assert.IsFalse(vm.RescanCommand.CanExecute(null));
