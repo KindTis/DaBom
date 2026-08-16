@@ -17,6 +17,10 @@ public sealed class MediaFilenameParserTests
         MediaType.TvEpisode, "도깨비", null, 1, 4)]
     [DataRow("도깨비.E05.161216.720p-NEXT.mp4",
         MediaType.TvEpisode, "도깨비", null, 1, 5)]
+    [DataRow("[tvN] 도깨비.E01.161202.HDTV.H264.1080p-Rumors.avi",
+        MediaType.TvEpisode, "도깨비", null, 1, 1)]
+    [DataRow("[REC].E01.2024.1080p.mkv",
+        MediaType.TvEpisode, "[REC]", null, 1, 1)]
     [DataRow(
         "Evangelion.3.33.You.Can.(Not).Redo.2012.1080p.BluRay.x264-CHD.mp4",
         MediaType.Movie, "Evangelion 3.33 You Can (Not) Redo", 2012, null, null)]

@@ -36,6 +36,9 @@ public sealed partial class MediaFilenameParser
     [GeneratedRegex(@"-[\p{L}\p{N}]+$")]
     private static partial Regex ReleaseGroupPattern();
 
+    [GeneratedRegex(@"^\[[^]]+\]\s+(?=\S)")]
+    private static partial Regex LeadingTagPattern();
+
     public MetadataQuery? Parse(string path)
     {
         var stem = Path.GetFileNameWithoutExtension(path);
@@ -46,7 +49,8 @@ public sealed partial class MediaFilenameParser
         if (!episode.Success) episode = EpisodePattern().Match(stem);
         if (episode.Success)
         {
-            var seriesTitle = Clean(stem[..episode.Index]);
+            var seriesTitle = Clean(LeadingTagPattern().Replace(
+                stem[..episode.Index], string.Empty));
             return HasSearchCharacter(seriesTitle)
                 ? new(
                     MediaType.TvEpisode,
