@@ -1304,6 +1304,51 @@ public sealed class MetadataEditorViewModelTests
         Assert.AreEqual(2, editor.TvEpisodes.Single().EpisodeNumber);
     }
 
+    [TestMethod]
+    public async Task GoBackInLookup_WhileEpisodeLookupIsRunning_KeepsSeasonStep()
+    {
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<IReadOnlyList<TvEpisodeCandidate>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var series = new MetadataCandidate(
+            "test", "tv-series", "1431", MediaType.TvEpisode);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Episode.mkv",
+            new VideoRecord(),
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([series]),
+            (_, _) => throw new AssertFailedException(
+                "에피소드 선택 전 상세 조회를 호출하면 안 됩니다."),
+            (_, _) => Task.FromResult<IReadOnlyList<TvSeasonCandidate>>(
+                [new(1, "Season 1", 1)]),
+            async (_, _, _) =>
+            {
+                started.TrySetResult();
+                return await release.Task;
+            });
+
+        editor.SearchText = "CSI";
+        Assert.IsTrue(await editor.SearchAsync());
+        Assert.IsFalse(await editor.SelectCandidateAsync(series));
+        var selecting = editor.SelectSeasonAsync(editor.TvSeasons.Single());
+        await started.Task;
+
+        try
+        {
+            editor.GoBackInLookup();
+
+            Assert.IsTrue(editor.IsSeasonStep);
+            Assert.AreSame(series, editor.PendingTvCandidate);
+        }
+        finally
+        {
+            release.TrySetResult([new(1, "Pilot", new DateOnly(2000, 10, 6))]);
+            await selecting;
+        }
+    }
+
     private static MetadataEditorViewModel CreateTvLookupEditor(
         Func<string, IReadOnlyList<MetadataCandidate>> search,
         Func<MetadataCandidate, IReadOnlyList<TvSeasonCandidate>> seasons,

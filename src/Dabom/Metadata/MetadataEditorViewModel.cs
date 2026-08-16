@@ -554,6 +554,11 @@ public sealed class MetadataEditorViewModel : ViewModelBase
 
     public void GoBackInLookup()
     {
+        if (IsLookupInProgress)
+        {
+            return;
+        }
+
         if (IsEpisodeStep)
         {
             SelectedTvSeason = null;
