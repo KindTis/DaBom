@@ -574,6 +574,46 @@ public sealed class MetadataEnrichmentServiceTests
     }
 
     [TestMethod]
+    public async Task RatingsRunState_RecordsStopOnlyBeforeOrAfterAtomicRequestStart()
+    {
+        using var requestEntered = new ManualResetEventSlim();
+        using var releaseRequest = new ManualResetEventSlim();
+        var requests = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler((_, token) =>
+        {
+            Interlocked.Increment(ref requests);
+            requestEntered.Set();
+            releaseRequest.Wait(token);
+            return Json("{}", HttpStatusCode.Unauthorized);
+        }));
+        var state = new MetadataEnrichmentService.RatingsRunState(
+            new OmdbRatingsClient(ratingsHttp, () => "key"));
+
+        var firstStart = Task.Run(() => state.StartRequest(
+            "tt1234567",
+            CancellationToken.None));
+        Assert.IsTrue(requestEntered.Wait(TimeSpan.FromSeconds(1)));
+
+        var recordStop = Task.Run(() =>
+            state.RecordFailure(RatingsFailureKind.Authentication));
+        Assert.IsFalse(recordStop.Wait(TimeSpan.FromMilliseconds(100)));
+
+        releaseRequest.Set();
+        var first = await firstStart;
+        await recordStop;
+        Assert.IsNotNull(first.Request);
+        await first.Request;
+
+        var stopped = state.StartRequest(
+            "tt7654321",
+            CancellationToken.None);
+
+        Assert.IsNull(stopped.Request);
+        Assert.AreEqual(RatingsFailureKind.Authentication, stopped.Failure);
+        Assert.AreEqual(1, requests);
+    }
+
+    [TestMethod]
     public async Task EnrichAsync_TransientRatingsFailureDoesNotStopOtherRequests()
     {
         var requests = 0;
@@ -611,6 +651,33 @@ public sealed class MetadataEnrichmentServiceTests
             CancellationToken.None);
 
         Assert.AreEqual(4, requests);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_InvalidImdbIdIsNotAConfigurationFailureTarget()
+    {
+        var requests = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+        {
+            requests++;
+            return Json("{}");
+        }));
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("영화", "1") with { ImdbId = "bad" });
+
+        var result = await RunSingleAsync(
+            [provider],
+            "Movie.2024.mkv",
+            ratingsClient: new OmdbRatingsClient(
+                ratingsHttp,
+                () => throw new IOException("denied")));
+
+        Assert.AreEqual(MetadataStatus.Matched, result.Record.MetadataStatus);
+        Assert.AreEqual("bad", result.Record.ImdbId);
+        Assert.IsFalse(result.Record.RatingsFetched);
+        Assert.AreEqual(RatingsFailureKind.InvalidResponse, result.Summary.RatingsFailure);
+        Assert.AreEqual(0, requests);
     }
 
     [TestMethod]
@@ -1744,13 +1811,26 @@ public sealed class MetadataEnrichmentServiceTests
                     "상세 조회를 호출하면 안 됩니다."));
     }
 
-    private sealed class ResponseHandler(
-        Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    private sealed class ResponseHandler : HttpMessageHandler
     {
+        private readonly Func<HttpRequestMessage, CancellationToken,
+            HttpResponseMessage> _respond;
+
+        internal ResponseHandler(
+            Func<HttpRequestMessage, HttpResponseMessage> respond)
+            : this((request, _) => respond(request))
+        {
+        }
+
+        internal ResponseHandler(
+            Func<HttpRequestMessage, CancellationToken,
+                HttpResponseMessage> respond) =>
+            _respond = respond;
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
-            Task.FromResult(respond(request));
+            Task.FromResult(_respond(request, cancellationToken));
     }
 
     private sealed class AsyncResponseHandler(

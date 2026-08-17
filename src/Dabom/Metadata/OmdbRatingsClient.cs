@@ -41,10 +41,7 @@ internal sealed class OmdbRatingsClient
         string imdbId,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(imdbId)
-            || !imdbId.StartsWith("tt", StringComparison.Ordinal)
-            || imdbId.Length <= 2
-            || imdbId[2..].Any(character => character is < '0' or > '9'))
+        if (!IsValidImdbId(imdbId))
         {
             return Failed(RatingsFailureKind.InvalidResponse);
         }
@@ -145,6 +142,12 @@ internal sealed class OmdbRatingsClient
 
     private static RatingsLookupResult Failed(RatingsFailureKind failure) =>
         new(null, null, null, false, failure);
+
+    internal static bool IsValidImdbId(string? imdbId) =>
+        !string.IsNullOrEmpty(imdbId)
+        && imdbId.StartsWith("tt", StringComparison.Ordinal)
+        && imdbId.Length > 2
+        && !imdbId[2..].Any(character => character is < '0' or > '9');
 
     private static double? ParseImdbRating(string? value) =>
         !string.IsNullOrWhiteSpace(value)
