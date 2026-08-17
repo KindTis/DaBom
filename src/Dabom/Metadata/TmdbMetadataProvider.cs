@@ -283,8 +283,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 GetMovieDetailsAsync(id, cancellationToken),
             MediaType.TvEpisode when candidate.ResourceType == "tv-series"
                 && candidate.SeasonNumber is int season
-                && candidate.EpisodeNumber is int episode =>
-                GetTvDetailsAsync(
+                && season >= 0
+                && candidate.EpisodeNumber is int episode
+                && episode > 0 => GetTvDetailsAsync(
                     id,
                     season,
                     episode,
@@ -841,12 +842,12 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         out int id)
     {
         id = 0;
-        var reference = references.SingleOrDefault(value =>
+        var matches = references.Where(value =>
             value.ProviderKey == "tmdb"
-            && value.ResourceType == resourceType);
-        return reference is not null
+            && value.ResourceType == resourceType).Take(2).ToArray();
+        return matches.Length == 1
             && int.TryParse(
-                reference.ResourceId,
+                matches[0].ResourceId,
                 NumberStyles.None,
                 CultureInfo.InvariantCulture,
                 out id)

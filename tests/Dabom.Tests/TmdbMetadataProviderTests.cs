@@ -1066,6 +1066,54 @@ public sealed class TmdbMetadataProviderTests
         Assert.AreEqual(0, handler.Requests.Count);
     }
 
+    [DataTestMethod]
+    [DataRow(-1, 1)]
+    [DataRow(0, 0)]
+    public async Task GetDetailsAsync_InvalidEpisodeCoordinates_RejectsBeforeRequest(
+        int seasonNumber,
+        int episodeNumber)
+    {
+        var handler = new RecordingHandler(_ => Json("{}"));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => provider.GetDetailsAsync(
+                new(
+                    "tmdb",
+                    "tv-series",
+                    "10",
+                    MediaType.TvEpisode,
+                    seasonNumber,
+                    episodeNumber),
+                CancellationToken.None));
+
+        Assert.AreEqual(0, handler.Requests.Count);
+    }
+
+    [TestMethod]
+    public async Task GetImdbIdAsync_DuplicateTmdbReferences_ReturnsNullWithoutRequest()
+    {
+        var handler = new RecordingHandler(_ => Json("{}"));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var imdbId = await provider.GetImdbIdAsync(
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences =
+                [
+                    new("tmdb", "movie", "597"),
+                    new("tmdb", "movie", "598")
+                ]
+            },
+            CancellationToken.None);
+
+        Assert.IsNull(imdbId);
+        Assert.AreEqual(0, handler.Requests.Count);
+    }
+
     [TestMethod]
     public async Task GetDetailsAsync_RejectsInvalidCandidateReferenceBeforeRequest()
     {
