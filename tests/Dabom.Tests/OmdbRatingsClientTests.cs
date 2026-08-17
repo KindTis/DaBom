@@ -130,6 +130,49 @@ public sealed class OmdbRatingsClientTests
     }
 
     [TestMethod]
+    public async Task FetchAsync_RejectsInvalidImdbIdsBeforeRequest()
+    {
+        foreach (var imdbId in new[] { "foo", "", "tt12x" })
+        {
+            var handler = new RecordingHandler(_ => Json("{}"));
+            using var http = new HttpClient(handler);
+            var client = new OmdbRatingsClient(http, () => "secret-key");
+
+            var result = await client.FetchAsync(
+                "secret-key", imdbId, CancellationToken.None);
+
+            Assert.IsFalse(result.Fetched);
+            Assert.AreEqual(RatingsFailureKind.InvalidResponse, result.Failure);
+            Assert.AreEqual(0, handler.Requests.Count);
+        }
+    }
+
+    [TestMethod]
+    public async Task FetchAsync_ClassifiesResponseStreamNetworkErrorsAsTransient()
+    {
+        foreach (Func<Exception> createError in
+            new Func<Exception>[]
+            {
+                () => new HttpRequestException("network failed"),
+                () => new IOException("network failed")
+            })
+        {
+            var handler = new RecordingHandler(_ => new(HttpStatusCode.OK)
+            {
+                Content = new ThrowingContent(createError)
+            });
+            using var http = new HttpClient(handler);
+            var client = new OmdbRatingsClient(http, () => "secret-key");
+
+            var result = await client.FetchAsync(
+                "secret-key", "tt1234567", CancellationToken.None);
+
+            Assert.IsFalse(result.Fetched);
+            Assert.AreEqual(RatingsFailureKind.Transient, result.Failure);
+        }
+    }
+
+    [TestMethod]
     public async Task FetchAsync_PropagatesCancellation()
     {
         using var cancellation = new CancellationTokenSource();
@@ -183,4 +226,25 @@ public sealed class OmdbRatingsClientTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
+
+    private sealed class ThrowingContent(Func<Exception> createError) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context) =>
+            Task.FromException(createError());
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromException<Stream>(createError());
+
+        protected override Task<Stream> CreateContentReadStreamAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromException<Stream>(createError());
+    }
 }

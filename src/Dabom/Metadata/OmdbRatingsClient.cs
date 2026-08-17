@@ -41,6 +41,14 @@ internal sealed class OmdbRatingsClient
         string imdbId,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrEmpty(imdbId)
+            || !imdbId.StartsWith("tt", StringComparison.Ordinal)
+            || imdbId.Length <= 2
+            || imdbId[2..].Any(character => character is < '0' or > '9'))
+        {
+            return Failed(RatingsFailureKind.InvalidResponse);
+        }
+
         var uri = new Uri(
             $"https://www.omdbapi.com/?apikey={Uri.EscapeDataString(apiKey)}&i={Uri.EscapeDataString(imdbId)}&r=json");
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -94,6 +102,11 @@ internal sealed class OmdbRatingsClient
             catch (OperationCanceledException)
             {
                 throw;
+            }
+            catch (Exception error) when (
+                error is HttpRequestException or IOException)
+            {
+                return Failed(RatingsFailureKind.Transient);
             }
             catch (Exception error) when (
                 error is JsonException or NotSupportedException)
