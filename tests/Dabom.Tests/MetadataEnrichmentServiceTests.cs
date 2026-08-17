@@ -1986,14 +1986,42 @@ public sealed class MetadataEnrichmentServiceTests
             index => RatingsRecord(MediaType.Movie, $"tt400000{index}"),
             StringComparer.OrdinalIgnoreCase);
         var requests = 0;
-        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
-        {
-            Interlocked.Increment(ref requests);
-            return Json("{}", status);
-        }));
-        var committed = new List<VideoRecord>();
+        var requestedIds = new string[3];
+        var threeStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFailure = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSuccesses = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ratingsHttp = new HttpClient(new AsyncResponseHandler(
+            async (request, token) =>
+            {
+                var call = Interlocked.Increment(ref requests) - 1;
+                if (call >= requestedIds.Length)
+                {
+                    throw new AssertFailedException(
+                        "중단 관측 뒤 후속 OMDb 요청을 시작하면 안 됩니다.");
+                }
+                var imdbId = request.RequestUri!.Query.Split("i=")[1].Split('&')[0];
+                requestedIds[call] = imdbId;
+                if (call == requestedIds.Length - 1) threeStarted.TrySetResult();
+                if (call == 0)
+                {
+                    await releaseFailure.Task.WaitAsync(token);
+                    return Json("{}", status);
+                }
 
-        var summary = await new MetadataEnrichmentService(
+                await releaseSuccesses.Task.WaitAsync(token);
+                return Json($$"""
+                    {"Response":"True","imdbID":"{{imdbId}}","imdbRating":"8.6",
+                     "Ratings":[{"Source":"Rotten Tomatoes","Value":"86%"}]}
+                    """);
+            }));
+        var committed = new Dictionary<string, VideoRecord>(StringComparer.Ordinal);
+        var failureCommitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var run = new MetadataEnrichmentService(
             new MediaFilenameParser(),
             [FakeProvider.Empty("tmdb")],
             new LibraryStore(_root.FullName),
@@ -2003,17 +2031,35 @@ public sealed class MetadataEnrichmentServiceTests
                 records.Keys.ToArray(),
                 (_, record, _, _) =>
                 {
-                    lock (committed) committed.Add(record);
+                    committed[record.ImdbId!] = record;
+                    if (record.ImdbId == requestedIds[0])
+                    {
+                        failureCommitted.TrySetResult();
+                    }
                     return Task.CompletedTask;
                 },
                 null,
                 CancellationToken.None,
                 ratingsBackfillSnapshot: records);
 
-        Assert.IsTrue(requests is >= 1 and <= 3);
+        await threeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(3, requests);
+        releaseFailure.TrySetResult();
+        await failureCommitted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseSuccesses.TrySetResult();
+        var summary = await run;
+
+        Assert.AreEqual(3, requests);
         Assert.AreEqual(expectedFailure, summary.RatingsFailure);
         Assert.AreEqual(5, committed.Count);
-        Assert.IsTrue(committed.All(record => !record.RatingsFetched));
+        Assert.IsFalse(committed[requestedIds[0]].RatingsFetched);
+        foreach (var imdbId in requestedIds.Skip(1))
+        {
+            Assert.IsTrue(committed[imdbId].RatingsFetched);
+            Assert.AreEqual(8.6, committed[imdbId].ImdbRating);
+            Assert.AreEqual(86, committed[imdbId].RottenTomatoesRating);
+        }
+        Assert.AreEqual(2, committed.Values.Count(record => record.RatingsFetched));
     }
 
     [DataTestMethod]
