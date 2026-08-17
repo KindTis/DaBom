@@ -3,6 +3,7 @@ using Dabom.Metadata;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 
 namespace Dabom.Tests;
 
@@ -301,6 +302,315 @@ public sealed class MetadataEnrichmentServiceTests
         Assert.AreEqual("새 제목", result.Record.Title);
         Assert.AreEqual("posters/old.png", result.Record.Poster);
         Assert.AreEqual(MetadataStatus.Failed, result.Record.MetadataStatus);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_StoresRatingsWithoutChangingMetadataSuccess()
+    {
+        var responses = new Queue<HttpResponseMessage>(
+        [
+            Json("""
+                {"Response":"True","imdbID":"tt1234567","imdbRating":"8.7",
+                 "Ratings":[{"Source":"Rotten Tomatoes","Value":"83%"}]}
+                """),
+            Json("""
+                {"Response":"True","imdbID":"tt1234567","imdbRating":"11.2",
+                 "Ratings":[{"Source":"Rotten Tomatoes","Value":"bad"}]}
+                """)
+        ]);
+        using var ratingsHttp = new HttpClient(new ResponseHandler(
+            _ => responses.Dequeue()));
+        var ratingsClient = new OmdbRatingsClient(ratingsHttp, () => "key");
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("영화", "1") with { ImdbId = "tt1234567" });
+
+        var valid = await RunSingleAsync(
+            [provider],
+            "Movie.2024.mkv",
+            ratingsClient: ratingsClient);
+        var invalidValues = await RunSingleAsync(
+            [provider],
+            "Other.Movie.2024.mkv",
+            ratingsClient: ratingsClient);
+
+        Assert.AreEqual(MetadataStatus.Matched, valid.Record.MetadataStatus);
+        Assert.AreEqual("tt1234567", valid.Record.ImdbId);
+        Assert.AreEqual(8.7, valid.Record.ImdbRating);
+        Assert.AreEqual(83, valid.Record.RottenTomatoesRating);
+        Assert.IsTrue(valid.Record.RatingsFetched);
+        Assert.AreEqual(MetadataStatus.Matched, invalidValues.Record.MetadataStatus);
+        Assert.IsNull(invalidValues.Record.ImdbRating);
+        Assert.IsNull(invalidValues.Record.RottenTomatoesRating);
+        Assert.IsTrue(invalidValues.Record.RatingsFetched);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_RatingsTimeoutAfterPosterKeepsMetadataMatched()
+    {
+        var posterCompleted = false;
+        using var imageClient = new HttpClient(new ResponseHandler(_ =>
+        {
+            posterCompleted = true;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(PngBytes())
+            };
+        }));
+        using var ratingsHttp = new HttpClient(new AsyncResponseHandler(
+            async (_, token) =>
+            {
+                Assert.IsTrue(posterCompleted);
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new AssertFailedException("취소 뒤 응답하면 안 됩니다.");
+            }));
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("영화", "1") with
+            {
+                ImdbId = "tt1234567",
+                PosterUri = new Uri("https://image.tmdb.org/poster.png")
+            });
+
+        var result = await RunSingleAsync(
+            [provider],
+            "Movie.2024.mkv",
+            imageClient: imageClient,
+            itemBudget: TimeSpan.FromMilliseconds(150),
+            ratingsClient: new OmdbRatingsClient(ratingsHttp, () => "key"));
+
+        Assert.AreEqual(MetadataStatus.Matched, result.Record.MetadataStatus);
+        Assert.IsNotNull(result.Record.Poster);
+        Assert.IsTrue(File.Exists(Path.Combine(_root.FullName, result.Record.Poster)));
+        Assert.AreEqual("tt1234567", result.Record.ImdbId);
+        Assert.IsFalse(result.Record.RatingsFetched);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_ExternalCancellationDuringRatingsDeletesCreatedPoster()
+    {
+        var ratingsStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var imageClient = new HttpClient(new ResponseHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(PngBytes())
+            }));
+        using var ratingsHttp = new HttpClient(new AsyncResponseHandler(
+            async (_, token) =>
+            {
+                ratingsStarted.SetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                return Json("""
+                    {"Response":"True","imdbID":"tt1234567",
+                     "imdbRating":"8.7","Ratings":[]}
+                    """);
+            }));
+        var provider = FakeProvider.WithMovie(
+            [new("fake", "movie", "1", MediaType.Movie)],
+            MovieDetails("영화", "1") with
+            {
+                ImdbId = "tt1234567",
+                PosterUri = new Uri("https://image.tmdb.org/poster.png")
+            });
+        var fullPath = Path.GetFullPath("Movie.2024.mkv");
+        var records = Records((fullPath, MetadataStatus.Pending));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key"));
+        using var cancellation = new CancellationTokenSource();
+
+        var run = service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, _, _, _) => Task.CompletedTask,
+            null,
+            cancellation.Token);
+        await ratingsStarted.Task;
+        cancellation.Cancel();
+
+        await Assert.ThrowsExceptionAsync<OperationCanceledException>(
+            async () => await run);
+        Assert.AreEqual(
+            0,
+            _root.GetFiles("*", SearchOption.AllDirectories).Length);
+    }
+
+    [TestMethod]
+    public void ApplyRatings_ProtectsExistingValuesOnlyForSameImdbId()
+    {
+        var current = new VideoRecord
+        {
+            ImdbId = "tt111",
+            ImdbRating = 7.5,
+            RottenTomatoesRating = 70,
+            RatingsFetched = true
+        };
+        var updated = current with { Title = "새 메타데이터" };
+
+        var sameIdFailure = MetadataEnrichmentService.ApplyRatings(
+            current,
+            updated,
+            new("tt111", null, null, false, RatingsFailureKind.Transient));
+        var differentIdFailure = MetadataEnrichmentService.ApplyRatings(
+            current,
+            updated,
+            new("tt222", null, null, false, RatingsFailureKind.Transient));
+        var noId = MetadataEnrichmentService.ApplyRatings(
+            current,
+            updated,
+            new(null, null, null, true));
+
+        Assert.AreEqual(7.5, sameIdFailure.ImdbRating);
+        Assert.AreEqual(70, sameIdFailure.RottenTomatoesRating);
+        Assert.IsFalse(sameIdFailure.RatingsFetched);
+        Assert.AreEqual("tt222", differentIdFailure.ImdbId);
+        Assert.IsNull(differentIdFailure.ImdbRating);
+        Assert.IsNull(differentIdFailure.RottenTomatoesRating);
+        Assert.IsFalse(differentIdFailure.RatingsFetched);
+        Assert.IsNull(noId.ImdbId);
+        Assert.IsNull(noId.ImdbRating);
+        Assert.IsNull(noId.RottenTomatoesRating);
+        Assert.IsTrue(noId.RatingsFetched);
+    }
+
+    [TestMethod]
+    public async Task GetManualDetailsAsync_AddsRatingsAfterCompleteMetadata()
+    {
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ => Json("""
+            {"Response":"True","imdbID":"tt1234567","imdbRating":"8.7",
+             "Ratings":[{"Source":"Rotten Tomatoes","Value":"83%"}]}
+            """)));
+        var candidate = new MetadataCandidate(
+            "fake", "movie", "1", MediaType.Movie);
+        var provider = FakeProvider.WithMovie(
+            [candidate],
+            MovieDetails("영화", "1") with { ImdbId = "tt1234567" });
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key"));
+
+        var details = await service.GetManualDetailsAsync(
+            candidate,
+            CancellationToken.None);
+
+        Assert.AreEqual("tt1234567", details.Ratings!.ImdbId);
+        Assert.AreEqual(8.7, details.Ratings.ImdbRating);
+        Assert.AreEqual(83, details.Ratings.RottenTomatoesRating);
+        Assert.IsTrue(details.Ratings.Fetched);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized, RatingsFailureKind.Authentication)]
+    [DataRow(HttpStatusCode.TooManyRequests, RatingsFailureKind.RateLimited)]
+    public async Task EnrichAsync_AuthenticationOrLimitStopsNewRatingsRequests(
+        HttpStatusCode status,
+        RatingsFailureKind expectedFailure)
+    {
+        var requests = 0;
+        var keyReads = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+        {
+            Interlocked.Increment(ref requests);
+            return Json("{}", status);
+        }));
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [new("fake", "movie", query.Title, MediaType.Movie)]),
+            (candidate, _) => Task.FromResult(
+                MovieDetails(candidate.ResourceId, candidate.ResourceId) with
+                {
+                    ImdbId = "tt1234567"
+                }));
+        var records = Records(
+            ("Movie1.2024.mkv", MetadataStatus.Pending),
+            ("Movie2.2024.mkv", MetadataStatus.Pending),
+            ("Movie3.2024.mkv", MetadataStatus.Pending),
+            ("Movie4.2024.mkv", MetadataStatus.Pending),
+            ("Movie5.2024.mkv", MetadataStatus.Pending));
+        var committed = new List<VideoRecord>();
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () =>
+            {
+                Interlocked.Increment(ref keyReads);
+                return "key";
+            }));
+
+        var summary = await service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, record, _, _) =>
+            {
+                committed.Add(record);
+                return Task.CompletedTask;
+            },
+            null,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, keyReads);
+        Assert.IsTrue(requests is >= 1 and <= 3);
+        Assert.AreEqual(expectedFailure, summary.RatingsFailure);
+        Assert.AreEqual(5, committed.Count);
+        Assert.IsTrue(committed.All(record =>
+            record.MetadataStatus == MetadataStatus.Matched
+            && !record.RatingsFetched));
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_TransientRatingsFailureDoesNotStopOtherRequests()
+    {
+        var requests = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+        {
+            Interlocked.Increment(ref requests);
+            return Json("{}", HttpStatusCode.ServiceUnavailable);
+        }));
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [new("fake", "movie", query.Title, MediaType.Movie)]),
+            (candidate, _) => Task.FromResult(
+                MovieDetails(candidate.ResourceId, candidate.ResourceId) with
+                {
+                    ImdbId = "tt1234567"
+                }));
+        var records = Records(
+            ("Movie1.2024.mkv", MetadataStatus.Pending),
+            ("Movie2.2024.mkv", MetadataStatus.Pending),
+            ("Movie3.2024.mkv", MetadataStatus.Pending),
+            ("Movie4.2024.mkv", MetadataStatus.Pending));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key"));
+
+        await service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, _, _, _) => Task.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        Assert.AreEqual(4, requests);
     }
 
     [TestMethod]
@@ -1194,7 +1504,8 @@ public sealed class MetadataEnrichmentServiceTests
     private MetadataEnrichmentService CreateTimedService(
         IReadOnlyList<IMetadataProvider> providers,
         HttpClient imageClient,
-        TimeSpan itemBudget) =>
+        TimeSpan itemBudget,
+        OmdbRatingsClient? ratingsClient = null) =>
         new(
             new MediaFilenameParser(),
             providers,
@@ -1202,7 +1513,8 @@ public sealed class MetadataEnrichmentServiceTests
             imageClient,
             itemBudget,
             () => DateTimeOffset.UtcNow,
-            Task.Delay);
+            Task.Delay,
+            ratingsClient);
 
     private static Dictionary<string, VideoRecord> Records(
         params (string Path, MetadataStatus Status)[] values) =>
@@ -1266,7 +1578,8 @@ public sealed class MetadataEnrichmentServiceTests
         VideoRecord? current = null,
         HttpClient? imageClient = null,
         TimeSpan? itemBudget = null,
-        bool requireSuccess = false)
+        bool requireSuccess = false,
+        OmdbRatingsClient? ratingsClient = null)
     {
         var fullPath = Path.GetFullPath(path);
         var records = new Dictionary<string, VideoRecord>(
@@ -1280,16 +1593,24 @@ public sealed class MetadataEnrichmentServiceTests
         };
         VideoRecord? committed = null;
         var progress = new List<MetadataProgress>();
-        var service = itemBudget is null
-            ? new MetadataEnrichmentService(
-                new MediaFilenameParser(),
-                providers,
-                new LibraryStore(_root.FullName),
-                imageClient ?? _imageClient)
-            : CreateTimedService(
+        var service = itemBudget is not null
+            ? CreateTimedService(
                 providers,
                 imageClient ?? _imageClient,
-                itemBudget.Value);
+                itemBudget.Value,
+                ratingsClient)
+            : ratingsClient is null
+                ? new MetadataEnrichmentService(
+                    new MediaFilenameParser(),
+                    providers,
+                    new LibraryStore(_root.FullName),
+                    imageClient ?? _imageClient)
+                : new MetadataEnrichmentService(
+                    new MediaFilenameParser(),
+                    providers,
+                    new LibraryStore(_root.FullName),
+                    imageClient ?? _imageClient,
+                    ratingsClient);
         var summary = await service.EnrichAsync(
             records,
             records.Keys.ToArray(),
@@ -1431,4 +1752,25 @@ public sealed class MetadataEnrichmentServiceTests
             CancellationToken cancellationToken) =>
             Task.FromResult(respond(request));
     }
+
+    private sealed class AsyncResponseHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            respond(request, cancellationToken);
+    }
+
+    private static HttpResponseMessage Json(
+        string body,
+        HttpStatusCode status = HttpStatusCode.OK) =>
+        new(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+
+    private static byte[] PngBytes() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
 }

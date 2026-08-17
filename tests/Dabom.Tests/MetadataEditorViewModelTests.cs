@@ -623,6 +623,168 @@ public sealed class MetadataEditorViewModelTests
         }
     }
 
+    [DataTestMethod]
+    [DataRow(
+        RatingsFailureKind.Authentication,
+        ".env의 DABOM_OMDB_API_KEY를 확인하세요. TMDB 메타데이터는 저장할 수 있습니다.")]
+    [DataRow(
+        RatingsFailureKind.Configuration,
+        ".env의 DABOM_OMDB_API_KEY를 확인하세요. TMDB 메타데이터는 저장할 수 있습니다.")]
+    [DataRow(
+        RatingsFailureKind.RateLimited,
+        "OMDb 요청 제한으로 평점만 가져오지 못했습니다. 나중에 다시 시도하세요.")]
+    public async Task SelectCandidateAsync_RatingsWarningKeepsSaveEnabled(
+        RatingsFailureKind failure,
+        string expectedWarning)
+    {
+        var saves = 0;
+        var candidate = new MetadataCandidate(
+            "test", "movie", "2", MediaType.Movie);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            new VideoRecord
+            {
+                ImdbId = "tt111",
+                ImdbRating = 7.5,
+                RatingsFetched = true
+            },
+            null,
+            (_, _) =>
+            {
+                saves++;
+                return Task.FromResult<string?>(null);
+            },
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            (_, _) => Task.FromResult(
+                MovieDetails("새 영화", "2") with
+                {
+                    ImdbId = "tt222",
+                    Ratings = new("tt222", null, null, false, failure)
+                }));
+
+        Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+        Assert.AreEqual(expectedWarning, editor.ErrorMessage);
+        Assert.AreEqual("tt222", editor.BuildRecord(null).ImdbId);
+        Assert.IsFalse(editor.BuildRecord(null).RatingsFetched);
+        Assert.IsTrue(await editor.SaveAsync());
+        Assert.AreEqual(1, saves);
+    }
+
+    [TestMethod]
+    public async Task SelectCandidateAsync_SilentRatingsFailuresKeepMetadataUsable()
+    {
+        foreach (var failure in new[]
+        {
+            RatingsFailureKind.MissingKey,
+            RatingsFailureKind.Transient,
+            RatingsFailureKind.InvalidResponse
+        })
+        {
+            var candidate = new MetadataCandidate(
+                "test", "movie", "2", MediaType.Movie);
+            var editor = new MetadataEditorViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord(),
+                null,
+                (_, _) => Task.FromResult<string?>(null),
+                (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+                (_, _) => Task.FromResult(
+                    MovieDetails("새 영화", "2") with
+                    {
+                        ImdbId = "tt222",
+                        Ratings = new("tt222", null, null, false, failure)
+                    }));
+
+            Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+            Assert.IsNull(editor.ErrorMessage);
+            Assert.IsTrue(await editor.SaveAsync());
+        }
+    }
+
+    [TestMethod]
+    public async Task SelectCandidateAsync_FailureOrCancellationPreservesExistingRatings()
+    {
+        var candidate = new MetadataCandidate(
+            "test", "movie", "2", MediaType.Movie);
+        var original = new VideoRecord
+        {
+            ImdbId = "tt111",
+            ImdbRating = 7.5,
+            RottenTomatoesRating = 70,
+            RatingsFetched = true
+        };
+        var failure = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            original,
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            (_, _) => Task.FromException<MetadataDetails>(
+                new MetadataProviderException(
+                    MetadataProviderFailureKind.Transient,
+                    "failed")));
+        var cancellation = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            original,
+            null,
+            (_, _) => Task.FromResult<string?>(null),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            async (_, token) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                throw new AssertFailedException("취소 뒤 완료하면 안 됩니다.");
+            });
+
+        Assert.IsFalse(await failure.SelectCandidateAsync(candidate));
+        var selecting = cancellation.SelectCandidateAsync(candidate);
+        cancellation.CancelLookup();
+        Assert.IsFalse(await selecting);
+
+        foreach (var record in new[]
+        {
+            failure.BuildRecord(null),
+            cancellation.BuildRecord(null)
+        })
+        {
+            Assert.AreEqual("tt111", record.ImdbId);
+            Assert.AreEqual(7.5, record.ImdbRating);
+            Assert.AreEqual(70, record.RottenTomatoesRating);
+            Assert.IsTrue(record.RatingsFetched);
+        }
+    }
+
+    [TestMethod]
+    public async Task SaveAsync_WhenCommitFails_DoesNotMutateOriginalRatings()
+    {
+        var candidate = new MetadataCandidate(
+            "test", "movie", "2", MediaType.Movie);
+        var editor = new MetadataEditorViewModel(
+            @"D:\Movie.mkv",
+            new VideoRecord
+            {
+                ImdbId = "tt111",
+                ImdbRating = 7.5,
+                RottenTomatoesRating = 70,
+                RatingsFetched = true
+            },
+            null,
+            (_, _) => Task.FromResult<string?>("저장 실패"),
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([candidate]),
+            (_, _) => Task.FromResult(
+                MovieDetails("새 영화", "2") with
+                {
+                    ImdbId = "tt222",
+                    Ratings = new("tt222", 8.0, 80, true)
+                }));
+
+        Assert.IsTrue(await editor.SelectCandidateAsync(candidate));
+        Assert.IsFalse(await editor.SaveAsync());
+        Assert.AreEqual("tt111", editor.OriginalRecord.ImdbId);
+        Assert.AreEqual(7.5, editor.OriginalRecord.ImdbRating);
+        Assert.AreEqual(70, editor.OriginalRecord.RottenTomatoesRating);
+        Assert.IsTrue(editor.OriginalRecord.RatingsFetched);
+    }
+
     [TestMethod]
     public async Task SelectCandidateAsync_SuccessClearsPendingPosterChoice()
     {

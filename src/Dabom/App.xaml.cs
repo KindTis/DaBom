@@ -20,20 +20,24 @@ public partial class App : Application
         var data = await store.LoadAsync(CancellationToken.None);
         var warning = store.LoadWarning;
 
-        var providers = new IMetadataProvider[]
-        {
-            new TmdbMetadataProvider(
-                _httpClient,
-                () => LocalEnvironment.ReadFromLocalApplicationData(
-                    Environment.GetFolderPath(
-                        Environment.SpecialFolder.LocalApplicationData),
-                    "DABOM_TMDB_ACCESS_TOKEN"))
-        };
+        var localAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData);
+        var tmdb = new TmdbMetadataProvider(
+            _httpClient,
+            () => LocalEnvironment.ReadFromLocalApplicationData(
+                localAppData,
+                "DABOM_TMDB_ACCESS_TOKEN"));
+        var ratings = new OmdbRatingsClient(
+            _httpClient,
+            () => LocalEnvironment.ReadFromLocalApplicationData(
+                localAppData,
+                "DABOM_OMDB_API_KEY"));
         var enrichment = new MetadataEnrichmentService(
             new MediaFilenameParser(),
-            providers,
+            [tmdb],
             store,
-            _httpClient);
+            _httpClient,
+            ratings);
         var viewModel = new MainViewModel(
             store,
             new LibraryScanner(),

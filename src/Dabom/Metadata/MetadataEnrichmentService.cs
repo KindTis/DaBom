@@ -19,7 +19,8 @@ public sealed record MetadataRunSummary(
     int Matched,
     int NotFound,
     int Failed,
-    bool AuthenticationFailed);
+    bool AuthenticationFailed,
+    RatingsFailureKind? RatingsFailure = null);
 
 public sealed class MetadataEnrichmentService
 {
@@ -28,6 +29,7 @@ public sealed class MetadataEnrichmentService
     private readonly IReadOnlyList<IMetadataProvider> _providers;
     private readonly LibraryStore _store;
     private readonly HttpClient _imageClient;
+    private readonly OmdbRatingsClient? _ratingsClient;
     private readonly TimeSpan _itemBudget;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
@@ -53,14 +55,34 @@ public sealed class MetadataEnrichmentService
         IReadOnlyList<IMetadataProvider> providers,
         LibraryStore store,
         HttpClient imageClient,
+        OmdbRatingsClient ratingsClient)
+        : this(
+            parser,
+            providers,
+            store,
+            imageClient,
+            DefaultItemBudget,
+            () => DateTimeOffset.UtcNow,
+            Task.Delay,
+            ratingsClient)
+    {
+    }
+
+    internal MetadataEnrichmentService(
+        MediaFilenameParser parser,
+        IReadOnlyList<IMetadataProvider> providers,
+        LibraryStore store,
+        HttpClient imageClient,
         TimeSpan itemBudget,
         Func<DateTimeOffset> utcNow,
-        Func<TimeSpan, CancellationToken, Task> delay)
+        Func<TimeSpan, CancellationToken, Task> delay,
+        OmdbRatingsClient? ratingsClient = null)
     {
         _parser = parser;
         _providers = providers;
         _store = store;
         _imageClient = imageClient;
+        _ratingsClient = ratingsClient;
         _itemBudget = itemBudget;
         _utcNow = utcNow;
         _delay = delay;
@@ -154,7 +176,15 @@ public sealed class MetadataEnrichmentService
                     MetadataProviderFailureKind.InvalidResponse,
                     "선택한 메타데이터 상세 정보가 완전하지 않습니다.");
             }
-            return details;
+            var ratingsState = new RatingsRunState(_ratingsClient);
+            return details with
+            {
+                Ratings = await LookupRatingsAsync(
+                    details.ImdbId,
+                    ratingsState,
+                    linked.Token,
+                    cancellationToken)
+            };
         }
         catch (OperationCanceledException)
             when (budget.IsCancellationRequested
@@ -209,6 +239,7 @@ public sealed class MetadataEnrichmentService
         var notFound = 0;
         var failed = 0;
         var authenticationFailed = false;
+        var ratingsState = new RatingsRunState(_ratingsClient);
         var completed = 0;
 
         try
@@ -350,6 +381,26 @@ public sealed class MetadataEnrichmentService
                             requireSuccess,
                             linked.Token,
                             token);
+                        if (updated.MetadataStatus == MetadataStatus.Matched)
+                        {
+                            try
+                            {
+                                updated = ApplyRatings(
+                                    current,
+                                    updated,
+                                    await LookupRatingsAsync(
+                                        selected.ImdbId,
+                                        ratingsState,
+                                        linked.Token,
+                                        token));
+                            }
+                            catch (OperationCanceledException)
+                                when (token.IsCancellationRequested)
+                            {
+                                TryDeletePoster(createdPoster);
+                                throw;
+                            }
+                        }
                     }
                 }
 
@@ -368,9 +419,7 @@ public sealed class MetadataEnrichmentService
                 }
                 catch
                 {
-                    try { _store.DeletePoster(createdPoster); }
-                    catch (Exception error) when (
-                        error is IOException or UnauthorizedAccessException) { }
+                    TryDeletePoster(createdPoster);
                     throw;
                 }
 
@@ -429,7 +478,72 @@ public sealed class MetadataEnrichmentService
             throw;
         }
 
-        return new(matched, notFound, failed, authenticationFailed);
+        return new(
+            matched,
+            notFound,
+            failed,
+            authenticationFailed,
+            ratingsState.Failure);
+    }
+
+    private async Task<RatingsLookupResult?> LookupRatingsAsync(
+        string? imdbId,
+        RatingsRunState state,
+        CancellationToken linkedToken,
+        CancellationToken cancellationToken)
+    {
+        if (_ratingsClient is null)
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(imdbId))
+        {
+            return new(null, null, null, true);
+        }
+
+        var unavailable = state.UnavailableFailure;
+        if (unavailable is not null || state.ApiKey is null)
+        {
+            var failure = unavailable ?? state.KeyFailure!.Value;
+            state.RecordFailure(failure);
+            return new(imdbId, null, null, false, failure);
+        }
+
+        RatingsLookupResult result;
+        try
+        {
+            result = await _ratingsClient.FetchAsync(
+                state.ApiKey,
+                imdbId,
+                linkedToken);
+        }
+        catch (OperationCanceledException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            result = new(
+                imdbId,
+                null,
+                null,
+                false,
+                RatingsFailureKind.Transient);
+        }
+
+        if (!result.Fetched)
+        {
+            result = result with { ImdbId = imdbId };
+            if (result.Failure is { } failure)
+            {
+                state.RecordFailure(failure);
+            }
+        }
+        return result;
+    }
+
+    private void TryDeletePoster(string? poster)
+    {
+        try { _store.DeletePoster(poster); }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException) { }
     }
 
     private async Task<T> ExecuteManualProviderCallAsync<T>(
@@ -712,6 +826,77 @@ public sealed class MetadataEnrichmentService
         current.UserEditedFields.Contains(field)
             ? currentValue
             : fetchedValue;
+
+    internal static VideoRecord ApplyRatings(
+        VideoRecord current,
+        VideoRecord updated,
+        RatingsLookupResult? result)
+    {
+        if (result is null) return updated;
+        if (result.Fetched)
+        {
+            return updated with
+            {
+                ImdbId = result.ImdbId,
+                ImdbRating = result.ImdbRating,
+                RottenTomatoesRating = result.RottenTomatoesRating,
+                RatingsFetched = true
+            };
+        }
+
+        var sameId = !string.IsNullOrWhiteSpace(result.ImdbId)
+            && string.Equals(
+                current.ImdbId,
+                result.ImdbId,
+                StringComparison.Ordinal);
+        return updated with
+        {
+            ImdbId = result.ImdbId,
+            ImdbRating = sameId ? current.ImdbRating : null,
+            RottenTomatoesRating = sameId
+                ? current.RottenTomatoesRating
+                : null,
+            RatingsFetched = false
+        };
+    }
+
+    private sealed class RatingsRunState
+    {
+        private int _failure;
+        private int _stopFailure;
+
+        internal RatingsRunState(OmdbRatingsClient? client)
+        {
+            if (client is null) return;
+            (ApiKey, KeyFailure) = client.ReadApiKey();
+        }
+
+        internal string? ApiKey { get; }
+        internal RatingsFailureKind? KeyFailure { get; }
+        internal RatingsFailureKind? UnavailableFailure =>
+            Read(Volatile.Read(ref _stopFailure));
+        internal RatingsFailureKind? Failure =>
+            UnavailableFailure ?? Read(Volatile.Read(ref _failure));
+
+        internal void RecordFailure(RatingsFailureKind failure)
+        {
+            Interlocked.CompareExchange(
+                ref _failure,
+                (int)failure + 1,
+                0);
+            if (failure is RatingsFailureKind.Authentication
+                or RatingsFailureKind.RateLimited)
+            {
+                Interlocked.CompareExchange(
+                    ref _stopFailure,
+                    (int)failure + 1,
+                    0);
+            }
+        }
+
+        private static RatingsFailureKind? Read(int value) =>
+            value == 0 ? null : (RatingsFailureKind)(value - 1);
+    }
 
     internal static string BuildEpisodeTitle(
         string? seriesTitle,

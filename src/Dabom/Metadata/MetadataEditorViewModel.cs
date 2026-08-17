@@ -787,7 +787,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             return false;
         }
 
-        _selectedBaseline = OriginalRecord with
+        var baseline = OriginalRecord with
         {
             Title = details.MediaType == MediaType.TvEpisode
                 ? MetadataEnrichmentService.BuildEpisodeTitle(
@@ -807,11 +807,16 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             EpisodeTitle = details.EpisodeTitle,
             SeasonNumber = details.SeasonNumber,
             EpisodeNumber = details.EpisodeNumber,
+            ImdbId = details.ImdbId,
             Genres = details.Genres,
             MetadataStatus = MetadataStatus.Matched,
             ProviderReferences = details.ProviderReferences,
             UserEditedFields = []
         };
+        _selectedBaseline = MetadataEnrichmentService.ApplyRatings(
+            OriginalRecord,
+            baseline,
+            details.Ratings);
 
         _mediaType = _selectedBaseline.MediaType;
         _seriesTitle = _selectedBaseline.SeriesTitle ?? string.Empty;
@@ -841,7 +846,7 @@ public sealed class MetadataEditorViewModel : ViewModelBase
         PendingTvCandidate = null;
         IsSearchPopupOpen = false;
         SetLookupStep(LookupStep.None);
-        ErrorMessage = null;
+        ErrorMessage = RatingsWarning(details.Ratings?.Failure);
         return true;
     }
 
@@ -924,6 +929,17 @@ public sealed class MetadataEditorViewModel : ViewModelBase
             MetadataProviderFailureKind.Transient =>
                 "온라인 메타데이터 조회에 실패했습니다. 잠시 후 다시 시도하세요.",
             _ => "메타데이터 응답을 처리하지 못했습니다. 다시 시도하세요."
+        };
+
+    private static string? RatingsWarning(RatingsFailureKind? kind) =>
+        kind switch
+        {
+            RatingsFailureKind.Configuration
+                or RatingsFailureKind.Authentication =>
+                ".env의 DABOM_OMDB_API_KEY를 확인하세요. TMDB 메타데이터는 저장할 수 있습니다.",
+            RatingsFailureKind.RateLimited =>
+                "OMDb 요청 제한으로 평점만 가져오지 못했습니다. 나중에 다시 시도하세요.",
+            _ => null
         };
 
     private enum LookupStep
