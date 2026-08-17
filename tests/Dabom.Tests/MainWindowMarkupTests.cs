@@ -713,7 +713,7 @@ public sealed class MainWindowMarkupTests
             videoTemplate.IndexOf("Assets/imdb.png", StringComparison.Ordinal)
             < videoTemplate.IndexOf("Assets/rotten_tomato.png", StringComparison.Ordinal));
         StringAssert.Contains(
-            videoTemplate,
+            videoTemplate.ReplaceLineEndings("\n"),
             "Text=\"평점\" FontSize=\"10\"\n                                           AutomationProperties.Name=\"{Binding RatingsAutomationName}\"");
         Assert.IsFalse(ratingsBorder.Contains(
             "AutomationProperties.Name",
