@@ -340,7 +340,8 @@ public sealed class TmdbMetadataProviderTests
                   "overview": "한국어 줄거리",
                   "release_date": "2024-07-25",
                   "genres": [{"id":1,"name":"드라마"},{"id":2,"name":"판타지"}],
-                  "poster_path": "/poster.jpg"
+                  "poster_path": "/poster.jpg",
+                  "external_ids": {"imdb_id":"tt1234567"}
                 }
                 """),
             Json(MovieCreditsJson(12)),
@@ -370,6 +371,7 @@ public sealed class TmdbMetadataProviderTests
         Assert.AreEqual("감독", details.Director);
         Assert.AreEqual(10, details.Actors.Length);
         Assert.AreEqual("한국어 줄거리", details.Synopsis);
+        Assert.AreEqual("tt1234567", details.ImdbId);
         Assert.AreEqual(
             "movie",
             details.ProviderReferences.Single().ResourceType);
@@ -379,7 +381,7 @@ public sealed class TmdbMetadataProviderTests
         CollectionAssert.AreEqual(
             new[]
             {
-                "/3/movie/1?language=ko-KR",
+                "/3/movie/1?language=ko-KR&append_to_response=external_ids",
                 "/3/movie/1/credits?language=ko-KR",
                 "/3/configuration"
             },
@@ -413,7 +415,8 @@ public sealed class TmdbMetadataProviderTests
                     {"id":2,"name":"중복 게스트"},
                     {"id":3,"name":"게스트"}
                   ],
-                  "crew":[{"id":30,"name":"에피소드 감독","job":"Director"}]
+                  "crew":[{"id":30,"name":"에피소드 감독","job":"Director"}],
+                  "external_ids":{"imdb_id":"tt1234567"}
                 }
                 """),
             Json("""
@@ -458,6 +461,7 @@ public sealed class TmdbMetadataProviderTests
         Assert.AreEqual("시리즈", details.SeriesTitle);
         Assert.AreEqual("회차", details.EpisodeTitle);
         Assert.AreEqual(new DateOnly(2024, 2, 3), details.ReleaseDate);
+        Assert.AreEqual("tt1234567", details.ImdbId);
         CollectionAssert.AreEqual(
             new[] { "tv-series", "tv-episode" },
             details.ProviderReferences
@@ -468,7 +472,7 @@ public sealed class TmdbMetadataProviderTests
             {
                 "/3/search/tv",
                 "/3/tv/10?language=ko-KR",
-                "/3/tv/10/season/2/episode/3?language=ko-KR",
+                "/3/tv/10/season/2/episode/3?language=ko-KR&append_to_response=external_ids",
                 "/3/configuration",
                 "/3/tv/10/season/2/episode/3/credits?language=ko-KR",
                 "/3/tv/10/credits?language=ko-KR"
@@ -518,11 +522,38 @@ public sealed class TmdbMetadataProviderTests
         CollectionAssert.AreEqual(
             new[]
             {
-                "/3/movie/1?language=ko-KR",
+                "/3/movie/1?language=ko-KR&append_to_response=external_ids",
                 "/3/movie/1?language=en-US",
                 "/3/movie/1/credits?language=ko-KR"
             },
             RequestPaths(handler));
+    }
+
+    [DataTestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("nm123")]
+    [DataRow("tt12x")]
+    public async Task GetDetailsAsync_InvalidExternalImdbId_ReturnsDetailsWithoutImdbId(
+        string? imdbId)
+    {
+        var handler = new RecordingHandler(_ => Json($$"""
+            {
+              "id":1,"title":"제목","original_title":"Original",
+              "overview":"줄거리","release_date":"2024-01-01",
+              "genres":[],"poster_path":null,
+              "external_ids":{"imdb_id":{{JsonSerializer.Serialize(imdbId)}}}
+            }
+            """));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var details = await provider.GetDetailsAsync(
+            new("tmdb", "movie", "1", MediaType.Movie),
+            CancellationToken.None);
+
+        Assert.AreEqual("제목", details.Title);
+        Assert.IsNull(details.ImdbId);
     }
 
     [TestMethod]
@@ -939,6 +970,100 @@ public sealed class TmdbMetadataProviderTests
         {
             root.Delete(true);
         }
+    }
+
+    [TestMethod]
+    public async Task GetImdbIdAsync_UsesMovieReferenceOrEpisodeCoordinates()
+    {
+        var handler = new RecordingHandler(request => Json(
+            request.RequestUri!.AbsolutePath.Contains(
+                "/movie/",
+                StringComparison.Ordinal)
+                ? """{"id":597,"imdb_id":"tt0120338"}"""
+                : """{"id":20,"imdb_id":"tt1234567"}"""));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+
+        var movie = await provider.GetImdbIdAsync(
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences = [new("tmdb", "movie", "597")]
+            },
+            CancellationToken.None);
+        var episode = await provider.GetImdbIdAsync(
+            new VideoRecord
+            {
+                MediaType = MediaType.TvEpisode,
+                SeasonNumber = 2,
+                EpisodeNumber = 3,
+                ProviderReferences = [new("tmdb", "tv-series", "10")]
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual("tt0120338", movie);
+        Assert.AreEqual("tt1234567", episode);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "/3/movie/597/external_ids",
+                "/3/tv/10/season/2/episode/3/external_ids"
+            },
+            handler.Requests.Select(request => request.Uri.AbsolutePath).ToArray());
+    }
+
+    [TestMethod]
+    public async Task GetImdbIdAsync_InvalidReferenceOrEpisodeCoordinates_ReturnsNullWithoutRequest()
+    {
+        var handler = new RecordingHandler(_ => Json("{}"));
+        using var client = new HttpClient(handler);
+        var provider = new TmdbMetadataProvider(client, () => "token");
+        var records = new[]
+        {
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences = [new("other", "movie", "597")]
+            },
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences = [new("tmdb", "tv-series", "597")]
+            },
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences = [new("tmdb", "movie", "0")]
+            },
+            new VideoRecord
+            {
+                MediaType = MediaType.Movie,
+                ProviderReferences = [new("tmdb", "movie", "invalid")]
+            },
+            new VideoRecord
+            {
+                MediaType = MediaType.TvEpisode,
+                SeasonNumber = -1,
+                EpisodeNumber = 3,
+                ProviderReferences = [new("tmdb", "tv-series", "10")]
+            },
+            new VideoRecord
+            {
+                MediaType = MediaType.TvEpisode,
+                SeasonNumber = 2,
+                EpisodeNumber = 0,
+                ProviderReferences = [new("tmdb", "tv-series", "10")]
+            }
+        };
+
+        foreach (var record in records)
+        {
+            Assert.IsNull(await provider.GetImdbIdAsync(
+                record,
+                CancellationToken.None));
+        }
+
+        Assert.AreEqual(0, handler.Requests.Count);
     }
 
     [TestMethod]

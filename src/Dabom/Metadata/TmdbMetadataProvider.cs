@@ -6,33 +6,9 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace Dabom.Metadata;
-
-internal static class TmdbAccessToken
-{
-    internal static string? ReadFromLocalApplicationData(
-        string localApplicationDataPath)
-    {
-        var envPath = Path.Combine(
-            Path.GetFullPath(localApplicationDataPath),
-            "Dabom",
-            ".env");
-        if (!File.Exists(envPath)) return null;
-        foreach (var rawLine in File.ReadLines(envPath))
-        {
-            var line = rawLine.Trim();
-            if (line.Length == 0 || line.StartsWith('#')) continue;
-            const string prefix = "DABOM_TMDB_ACCESS_TOKEN=";
-            if (line.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                return line[prefix.Length..].Trim().Trim('"');
-            }
-        }
-
-        return null;
-    }
-}
 
 public sealed class TmdbMetadataProvider : IMetadataProvider
 {
@@ -40,6 +16,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         new("https://api.themoviedb.org/3/");
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
+    private static readonly Regex ImdbIdPattern = new(
+        "^tt[0-9]+$",
+        RegexOptions.CultureInvariant);
     private readonly HttpClient _client;
     private readonly Func<string?> _getAccessToken;
     private readonly SemaphoreSlim _imageConfigurationGate = new(1, 1);
@@ -314,12 +293,41 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         };
     }
 
+    public async Task<string?> GetImdbIdAsync(
+        VideoRecord record,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = record.MediaType switch
+        {
+            MediaType.Movie when TryGetTmdbId(
+                record.ProviderReferences,
+                "movie",
+                out var movieId) => $"movie/{movieId}/external_ids",
+            MediaType.TvEpisode when record.SeasonNumber is int seasonNumber
+                && seasonNumber >= 0
+                && record.EpisodeNumber is int episodeNumber
+                && episodeNumber > 0
+                && TryGetTmdbId(
+                    record.ProviderReferences,
+                    "tv-series",
+                    out var seriesId) =>
+                $"tv/{seriesId}/season/{seasonNumber}/episode/{episodeNumber}/external_ids",
+            _ => null
+        };
+        if (endpoint is null) return null;
+
+        var response = await SendJsonAsync<ExternalIdsResponse>(
+            endpoint,
+            cancellationToken);
+        return ValidImdbId(response.ImdbId);
+    }
+
     private async Task<MetadataDetails> GetMovieDetailsAsync(
         int movieId,
         CancellationToken cancellationToken)
     {
         var korean = await SendJsonAsync<MovieDetailsResponse>(
-            $"movie/{movieId}?language=ko-KR",
+            $"movie/{movieId}?language=ko-KR&append_to_response=external_ids",
             cancellationToken);
         ValidateId(korean.Id, movieId, "영화");
         var title = korean.Title;
@@ -409,7 +417,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                     movieId.ToString(CultureInfo.InvariantCulture))
             ],
             PosterFailed: posterFailed,
-            OptionalIssue: issue);
+            OptionalIssue: issue,
+            ImdbId: ValidImdbId(korean.ExternalIds?.ImdbId));
     }
 
     private async Task<MetadataDetails> GetTvDetailsAsync(
@@ -440,7 +449,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         var episodePath =
             $"tv/{seriesId}/season/{seasonNumber}/episode/{episodeNumber}";
         var episode = await SendJsonAsync<TvEpisodeDetailsResponse>(
-            $"{episodePath}?language=ko-KR",
+            $"{episodePath}?language=ko-KR&append_to_response=external_ids",
             cancellationToken);
         if (episode.Id <= 0)
         {
@@ -540,7 +549,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                     episode.Id.ToString(CultureInfo.InvariantCulture))
             ],
             PosterFailed: posterFailed,
-            OptionalIssue: issue);
+            OptionalIssue: issue,
+            ImdbId: ValidImdbId(episode.ExternalIds?.ImdbId));
     }
 
     private async Task<Uri?> GetPosterUriAsync(
@@ -825,6 +835,30 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static bool TryGetTmdbId(
+        IEnumerable<ProviderReference> references,
+        string resourceType,
+        out int id)
+    {
+        id = 0;
+        var reference = references.SingleOrDefault(value =>
+            value.ProviderKey == "tmdb"
+            && value.ResourceType == resourceType);
+        return reference is not null
+            && int.TryParse(
+                reference.ResourceId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out id)
+            && id > 0;
+    }
+
+    private static string? ValidImdbId(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && ImdbIdPattern.IsMatch(value)
+            ? value
+            : null;
+
     private static MetadataProviderException InvalidResponse(string message) =>
         new(MetadataProviderFailureKind.InvalidResponse, message);
 
@@ -894,6 +928,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         [JsonPropertyName("poster_path")]
         public string? PosterPath { get; init; }
+
+        [JsonPropertyName("external_ids")]
+        public ExternalIdsResponse? ExternalIds { get; init; }
     }
 
     private sealed record TvSeriesDetailsResponse
@@ -981,6 +1018,15 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         [JsonPropertyName("crew")]
         public PersonResponse[]? Crew { get; init; }
+
+        [JsonPropertyName("external_ids")]
+        public ExternalIdsResponse? ExternalIds { get; init; }
+    }
+
+    private sealed record ExternalIdsResponse
+    {
+        [JsonPropertyName("imdb_id")]
+        public string? ImdbId { get; init; }
     }
 
     private sealed record CreditsResponse

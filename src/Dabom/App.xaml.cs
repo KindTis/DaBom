@@ -24,9 +24,10 @@ public partial class App : Application
         {
             new TmdbMetadataProvider(
                 _httpClient,
-                () => TmdbAccessToken.ReadFromLocalApplicationData(
+                () => LocalEnvironment.ReadFromLocalApplicationData(
                     Environment.GetFolderPath(
-                        Environment.SpecialFolder.LocalApplicationData)))
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "DABOM_TMDB_ACCESS_TOKEN"))
         };
         var enrichment = new MetadataEnrichmentService(
             new MediaFilenameParser(),

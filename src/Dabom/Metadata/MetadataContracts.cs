@@ -75,7 +75,9 @@ public sealed record MetadataDetails(
     Uri? PosterUri,
     ProviderReference[] ProviderReferences,
     bool PosterFailed = false,
-    MetadataProviderIssue? OptionalIssue = null);
+    MetadataProviderIssue? OptionalIssue = null,
+    string? ImdbId = null,
+    RatingsLookupResult? Ratings = null);
 
 public sealed class MetadataProviderException(
     MetadataProviderFailureKind kind,
@@ -99,6 +101,11 @@ public interface IMetadataProvider
     Task<MetadataDetails> GetDetailsAsync(
         MetadataCandidate candidate,
         CancellationToken cancellationToken);
+
+    Task<string?> GetImdbIdAsync(
+        VideoRecord record,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(null);
 
     Task<IReadOnlyList<TvSeasonCandidate>> GetTvSeasonsAsync(
         MetadataCandidate series,
