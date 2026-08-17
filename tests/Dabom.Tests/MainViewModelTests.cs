@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.ExceptionServices;
+using System.Text;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -4397,6 +4398,239 @@ public sealed class MainViewModelTests
         }
     }
 
+    [TestMethod]
+    public async Task ScanAsync_BackfillsOnlyCurrentSnapshotVideoOnceAndReportsProgress()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-ratings-backfill-");
+        try
+        {
+            var current = Path.Combine(root.FullName, "Current.Movie.mkv");
+            var missing = Path.Combine(root.FullName, "Missing.Movie.mkv");
+            var data = CachedData(root.FullName, current, missing);
+            data.VideosByPath[current] = data.VideosByPath[current] with
+            {
+                Title = "현재 영화",
+                MediaType = MediaType.Movie,
+                MetadataStatus = MetadataStatus.Matched,
+                ImdbId = "tt7000001",
+                ProviderReferences = [new("tmdb", "movie", "10")]
+            };
+            data.VideosByPath[missing] = data.VideosByPath[missing] with
+            {
+                Title = "누락 영화",
+                MediaType = MediaType.Movie,
+                MetadataStatus = MetadataStatus.Matched,
+                ImdbId = "tt7000002",
+                ProviderReferences = [new("tmdb", "movie", "20")]
+            };
+            var store = new LibraryStore(root.FullName);
+            await store.SaveAsync(data);
+            var handler = new ResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"Response":"True","imdbID":"tt7000001","imdbRating":"8.4","Ratings":[]}""",
+                    Encoding.UTF8,
+                    "application/json")
+            });
+            using var ratingsHttp = new HttpClient(handler);
+            using var imageClient = new HttpClient();
+            var provider = TestProvider.ForMovie(MovieDetails("unused", "1"));
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(current),
+                CreateEnrichment(
+                    store,
+                    imageClient,
+                    provider,
+                    new OmdbRatingsClient(ratingsHttp, () => "key")),
+                data);
+            var messages = new List<string>();
+            vm.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(MainViewModel.StatusMessage))
+                {
+                    lock (messages) messages.Add(vm.StatusMessage);
+                }
+            };
+
+            await vm.ScanAsync();
+            await vm.ScanAsync();
+
+            Assert.AreEqual(1, handler.Calls);
+            Assert.IsTrue(vm.Videos.Single(video => video.Path == current)
+                .Record.RatingsFetched);
+            Assert.IsFalse(vm.Videos.Single(video => video.Path == missing)
+                .Record.RatingsFetched);
+            lock (messages)
+            {
+                var ratingsProgress = messages.Where(message =>
+                    message.StartsWith("평점 보충", StringComparison.Ordinal)).ToArray();
+                CollectionAssert.AreEqual(
+                    new[] { "평점 보충 0/1", "평점 보충 1/1" },
+                    ratingsProgress);
+            }
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(RatingsFailureKind.MissingKey, null)]
+    [DataRow(RatingsFailureKind.Configuration, ".env의 DABOM_OMDB_API_KEY를 확인한 뒤 다시 탐색하세요.")]
+    [DataRow(RatingsFailureKind.Authentication, ".env의 DABOM_OMDB_API_KEY를 확인한 뒤 다시 탐색하세요.")]
+    [DataRow(RatingsFailureKind.RateLimited, "OMDb 요청 제한에 도달했습니다. 나중에 다시 탐색하세요.")]
+    [DataRow(RatingsFailureKind.Transient, null)]
+    [DataRow(RatingsFailureKind.InvalidResponse, null)]
+    public async Task ScanAsync_RatingsFailureOnlyAddsActionableStatusGuidance(
+        RatingsFailureKind failure,
+        string? expectedGuidance)
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-ratings-guidance-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Title = "영화",
+                MediaType = MediaType.Movie,
+                MetadataStatus = MetadataStatus.Matched,
+                ImdbId = "tt8000001",
+                ProviderReferences = [new("tmdb", "movie", "10")]
+            };
+            var store = new LibraryStore(root.FullName);
+            await store.SaveAsync(data);
+            var handler = new ResponseHandler(_ => failure switch
+            {
+                RatingsFailureKind.Authentication =>
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized),
+                RatingsFailureKind.RateLimited =>
+                    new HttpResponseMessage(HttpStatusCode.TooManyRequests),
+                RatingsFailureKind.Transient =>
+                    new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+                _ => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                }
+            });
+            using var ratingsHttp = new HttpClient(handler);
+            using var imageClient = new HttpClient();
+            string? ReadKey() => failure switch
+            {
+                RatingsFailureKind.MissingKey => null,
+                RatingsFailureKind.Configuration => throw new IOException("cannot read"),
+                _ => "key"
+            };
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(
+                    store,
+                    imageClient,
+                    TestProvider.ForMovie(MovieDetails("unused", "1")),
+                    new OmdbRatingsClient(ratingsHttp, ReadKey)),
+                data);
+            var progressMessages = new List<string>();
+            var toasts = new List<string>();
+            vm.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(MainViewModel.StatusMessage))
+                {
+                    lock (progressMessages) progressMessages.Add(vm.StatusMessage);
+                }
+            };
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
+
+            await vm.ScanAsync();
+
+            lock (progressMessages)
+            {
+                Assert.IsTrue(progressMessages.Contains("평점 보충 0/1"));
+            }
+            if (expectedGuidance is null)
+            {
+                Assert.IsFalse(vm.StatusMessage.Contains(
+                    "DABOM_OMDB_API_KEY",
+                    StringComparison.Ordinal));
+                Assert.IsFalse(vm.StatusMessage.Contains(
+                    "OMDb 요청 제한",
+                    StringComparison.Ordinal));
+            }
+            else
+            {
+                StringAssert.Contains(vm.StatusMessage, expectedGuidance);
+            }
+            Assert.AreEqual(
+                failure is RatingsFailureKind.MissingKey
+                    or RatingsFailureKind.Configuration ? 0 : 1,
+                handler.Calls);
+            Assert.IsFalse(toasts.Any(message =>
+                message.Contains("평점 보충", StringComparison.Ordinal)
+                || message.Contains("DABOM_OMDB_API_KEY", StringComparison.Ordinal)
+                || message.Contains("OMDb 요청 제한", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void ScanAsync_RatingsFailureDoesNotChangeMetadataSummaryToast()
+    {
+        RunOnDispatcher(async () =>
+        {
+            var root = Directory.CreateTempSubdirectory("dabom-ratings-toast-");
+            try
+            {
+                var path = Path.Combine(root.FullName, "Movie.mkv");
+                var sourcePoster = Path.Combine(root.FullName, "source.png");
+                WritePng(sourcePoster);
+                var store = new LibraryStore(root.FullName);
+                using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+                    new HttpResponseMessage(HttpStatusCode.Unauthorized)));
+                using var imageClient = new HttpClient(new ResponseHandler(_ =>
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(File.ReadAllBytes(sourcePoster))
+                    }));
+                var details = MovieDetails(
+                    "메타데이터 제목",
+                    "1",
+                    new Uri("https://image.tmdb.org/poster.png")) with
+                {
+                    ImdbId = "tt9000001"
+                };
+                var vm = new MainViewModel(
+                    store,
+                    new StubScanner(path),
+                    CreateEnrichment(
+                        store,
+                        imageClient,
+                        TestProvider.ForMovie(details),
+                        new OmdbRatingsClient(ratingsHttp, () => "key")),
+                    new LibraryData { Locations = [root.FullName] });
+                var toasts = new List<string>();
+                vm.ToastRequested += (_, message) => toasts.Add(message.Message);
+
+                await vm.ScanAsync();
+
+                StringAssert.Contains(
+                    vm.StatusMessage,
+                    ".env의 DABOM_OMDB_API_KEY를 확인한 뒤 다시 탐색하세요.");
+                CollectionAssert.AreEqual(
+                    new[] { "메타데이터 적용 완료 · 성공 1 · 결과 없음 0 · 실패 0" },
+                    toasts);
+            }
+            finally
+            {
+                root.Delete(true);
+            }
+        });
+    }
+
     private static VideoDeletionPreparation PrepareSelectedVideo(MainViewModel viewModel) =>
         viewModel.PrepareVideoDeletions([viewModel.SelectedVideo!])!;
 
@@ -4458,8 +4692,11 @@ public sealed class MainViewModelTests
     private static MetadataEnrichmentService CreateEnrichment(
         LibraryStore store,
         HttpClient imageClient,
-        IMetadataProvider provider) =>
-        new(new MediaFilenameParser(), [provider], store, imageClient);
+        IMetadataProvider provider,
+        OmdbRatingsClient? ratingsClient = null) =>
+        ratingsClient is null
+            ? new(new MediaFilenameParser(), [provider], store, imageClient)
+            : new(new MediaFilenameParser(), [provider], store, imageClient, ratingsClient);
 
     private static LibraryData CachedData(string location, params string[] paths) => new()
     {

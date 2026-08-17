@@ -1,5 +1,6 @@
 using Dabom.Library;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 
@@ -14,6 +15,8 @@ public sealed record MetadataProgress(
     int Failed,
     MetadataStatus Status,
     bool CommitSucceeded);
+
+public sealed record RatingsProgress(int Completed, int Total);
 
 public sealed record MetadataRunSummary(
     int Matched,
@@ -225,7 +228,9 @@ public sealed class MetadataEnrichmentService
         Func<string, VideoRecord, string?, CancellationToken, Task> commitAsync,
         Action<MetadataProgress>? progress,
         CancellationToken cancellationToken,
-        IReadOnlySet<string>? requiredSuccessPaths = null)
+        IReadOnlySet<string>? requiredSuccessPaths = null,
+        IReadOnlyDictionary<string, VideoRecord>? ratingsBackfillSnapshot = null,
+        Action<RatingsProgress>? ratingsProgress = null)
     {
         var targets = currentPaths
             .Where(path => records.TryGetValue(path, out var record)
@@ -478,6 +483,129 @@ public sealed class MetadataEnrichmentService
             throw;
         }
 
+        var currentPathSet = currentPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ratingsTargets = ratingsBackfillSnapshot?
+            .Where(pair => currentPathSet.Contains(pair.Key)
+                && IsRatingsBackfillCandidate(pair.Value))
+            .Select(pair => pair.Key)
+            .ToArray()
+            ?? [];
+        if (ratingsTargets.Length > 0)
+        {
+            ratingsProgress?.Invoke(new(0, ratingsTargets.Length));
+            if (ratingsState.KeyFailure is { } keyFailure)
+            {
+                RecordFailure(ratingsState, keyFailure);
+            }
+            else if (_ratingsClient is not null
+                && ratingsState.UnavailableFailure is null)
+            {
+                var tmdbProvider = _providers.FirstOrDefault(provider =>
+                    string.Equals(
+                        provider.ProviderKey,
+                        "tmdb",
+                        StringComparison.Ordinal));
+                var ratingsCompleted = 0;
+                await Parallel.ForEachAsync(
+                    ratingsTargets,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = 3,
+                        CancellationToken = cancellationToken
+                    },
+                    async (path, token) =>
+                    {
+                        var current = records[path];
+                        var imdbId = OmdbRatingsClient.IsValidImdbId(current.ImdbId)
+                            ? current.ImdbId
+                            : null;
+                        var externalIdFailed = false;
+                        var itemAuthenticationFailed = false;
+                        using var budget = new CancellationTokenSource(_itemBudget);
+                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                            token,
+                            budget.Token);
+
+                        if (imdbId is null)
+                        {
+                            if (tmdbProvider is null
+                                || (unavailableUntil.TryGetValue(
+                                        tmdbProvider.ProviderKey,
+                                        out var until)
+                                    && until > _utcNow()))
+                            {
+                                externalIdFailed = true;
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    imdbId = await tmdbProvider.GetImdbIdAsync(
+                                        current,
+                                        linked.Token);
+                                }
+                                catch (MetadataProviderException error)
+                                {
+                                    token.ThrowIfCancellationRequested();
+                                    externalIdFailed = true;
+                                    itemAuthenticationFailed = error.Kind
+                                        == MetadataProviderFailureKind.Authentication;
+                                    if (error.RetryAfter is { } retryAfter)
+                                    {
+                                        ExtendUnavailableUntil(
+                                            unavailableUntil,
+                                            tmdbProvider.ProviderKey,
+                                            retryAfter);
+                                    }
+                                }
+                                catch (OperationCanceledException)
+                                    when (budget.IsCancellationRequested
+                                        && !token.IsCancellationRequested)
+                                {
+                                    externalIdFailed = true;
+                                }
+                            }
+                        }
+
+                        var updated = externalIdFailed
+                            ? current
+                            : ApplyRatings(
+                                current,
+                                current,
+                                await LookupRatingsAsync(
+                                    imdbId,
+                                    ratingsState,
+                                    linked.Token,
+                                    token));
+                        await commitGate.WaitAsync(token);
+                        try
+                        {
+                            try
+                            {
+                                await commitAsync(path, updated, null, token);
+                            }
+                            catch (OperationCanceledException)
+                                when (token.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch
+                            {
+                            }
+
+                            authenticationFailed |= itemAuthenticationFailed;
+                            ratingsProgress?.Invoke(new(
+                                ++ratingsCompleted,
+                                ratingsTargets.Length));
+                        }
+                        finally
+                        {
+                            commitGate.Release();
+                        }
+                    });
+            }
+        }
+
         return new(
             matched,
             notFound,
@@ -485,6 +613,38 @@ public sealed class MetadataEnrichmentService
             authenticationFailed,
             ratingsState.Failure);
     }
+
+    private static bool IsRatingsBackfillCandidate(VideoRecord record)
+    {
+        if (record.MetadataStatus != MetadataStatus.Matched
+            || record.RatingsFetched)
+        {
+            return false;
+        }
+
+        return record.MediaType switch
+        {
+            MediaType.Movie => HasValidTmdbReference(record, "movie"),
+            MediaType.TvEpisode =>
+                record.SeasonNumber is >= 0
+                && record.EpisodeNumber is > 0
+                && HasValidTmdbReference(record, "tv-series"),
+            _ => false
+        };
+    }
+
+    private static bool HasValidTmdbReference(
+        VideoRecord record,
+        string resourceType) =>
+        record.ProviderReferences.Any(reference =>
+            reference.ProviderKey == "tmdb"
+            && reference.ResourceType == resourceType
+            && int.TryParse(
+                reference.ResourceId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var id)
+            && id > 0);
 
     private async Task<RatingsLookupResult?> LookupRatingsAsync(
         string? imdbId,

@@ -577,6 +577,7 @@ public sealed class MainViewModel : ViewModelBase
             var activeStoredPaths = _data.VideosByPath.Keys
                 .Where(path => _data.Locations.Any(location => IsWithinLocation(path, location)))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var ratingsBackfillSnapshot = _data.VideosByPath;
             var acceptScanProgress = true;
             ScanResult result;
             try
@@ -695,18 +696,33 @@ public sealed class MainViewModel : ViewModelBase
                         new Action(() => ShowMetadataProgress(value, newPaths)));
                 }
 
+                void ReportRatingsProgress(RatingsProgress value)
+                {
+                    if (uiDispatcher is null)
+                    {
+                        ShowRatingsProgress(value);
+                        return;
+                    }
+
+                    uiDispatcher.BeginInvoke(
+                        DispatcherPriority.Normal,
+                        new Action(() => ShowRatingsProgress(value)));
+                }
+
                 summary = await Task.Run(() => _metadataEnrichment.EnrichAsync(
-                    _data.VideosByPath,
-                    result.Videos.Keys.ToArray(),
-                    (path, record, poster, token) => CommitEnrichedRecordAsync(
+                    records: _data.VideosByPath,
+                    currentPaths: result.Videos.Keys.ToArray(),
+                    commitAsync: (path, record, poster, token) => CommitEnrichedRecordAsync(
                         path,
                         record,
                         poster,
                         committedPaths,
                         token),
-                    ReportProgress,
-                    _lifetimeToken,
-                    newPaths),
+                    progress: ReportProgress,
+                    cancellationToken: _lifetimeToken,
+                    requiredSuccessPaths: newPaths,
+                    ratingsBackfillSnapshot: ratingsBackfillSnapshot,
+                    ratingsProgress: ReportRatingsProgress),
                     _lifetimeToken);
             }
 
@@ -722,7 +738,15 @@ public sealed class MainViewModel : ViewModelBase
                         + (summary.AuthenticationFailed
                             ? " · .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
                             : string.Empty);
-                StatusMessage = finalMessage;
+                StatusMessage = finalMessage + (summary.RatingsFailure switch
+                {
+                    RatingsFailureKind.Configuration
+                        or RatingsFailureKind.Authentication =>
+                        " · .env의 DABOM_OMDB_API_KEY를 확인한 뒤 다시 탐색하세요.",
+                    RatingsFailureKind.RateLimited =>
+                        " · OMDb 요청 제한에 도달했습니다. 나중에 다시 탐색하세요.",
+                    _ => string.Empty
+                });
                 if (newPaths.Count > 0 && processed > 0)
                 {
                     RequestToast(finalMessage);
@@ -1196,6 +1220,9 @@ public sealed class MainViewModel : ViewModelBase
                 video);
         }
     }
+
+    private void ShowRatingsProgress(RatingsProgress progress) =>
+        StatusMessage = $"평점 보충 {progress.Completed}/{progress.Total}";
 
     private void ApplyCurrentVideos(
         IEnumerable<string> currentPaths,

@@ -1675,6 +1675,455 @@ public sealed class MetadataEnrichmentServiceTests
         Assert.AreEqual(2, selected.TvBrowseCalls);
     }
 
+    [TestMethod]
+    public async Task EnrichAsync_BackfillsOnlyEligibleCurrentSnapshotRecordsAndKeepsLatestRecord()
+    {
+        var movie = Path.GetFullPath("Eligible.Movie.mkv");
+        var episode = Path.GetFullPath("Eligible.Series.S01E02.mkv");
+        var fetched = Path.GetFullPath("Fetched.Movie.mkv");
+        var pending = Path.GetFullPath("Pending.Movie.mkv");
+        var notFound = Path.GetFullPath("NotFound.Movie.mkv");
+        var failed = Path.GetFullPath("Failed.Movie.mkv");
+        var manual = Path.GetFullPath("Manual.Movie.mkv");
+        var missing = Path.GetFullPath("Missing.Movie.mkv");
+        var noReference = Path.GetFullPath("No.Reference.mkv");
+        var badReference = Path.GetFullPath("Bad.Reference.mkv");
+        var badEpisode = Path.GetFullPath("Bad.Series.S01E00.mkv");
+        var newlyMatched = Path.GetFullPath("New.Movie.mkv");
+        var snapshot = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [movie] = RatingsRecord(MediaType.Movie, "tt1000001"),
+            [episode] = RatingsRecord(MediaType.TvEpisode, "tt1000002"),
+            [fetched] = RatingsRecord(MediaType.Movie, "tt1000003") with
+            {
+                RatingsFetched = true
+            },
+            [pending] = RatingsRecord(MediaType.Movie, "tt1000004") with
+            {
+                MetadataStatus = MetadataStatus.Pending
+            },
+            [notFound] = RatingsRecord(MediaType.Movie, "tt1000005") with
+            {
+                MetadataStatus = MetadataStatus.NotFound
+            },
+            [failed] = RatingsRecord(MediaType.Movie, "tt1000006") with
+            {
+                MetadataStatus = MetadataStatus.Failed
+            },
+            [manual] = RatingsRecord(MediaType.Movie, "tt1000007") with
+            {
+                MetadataStatus = MetadataStatus.Manual
+            },
+            [missing] = RatingsRecord(MediaType.Movie, "tt1000008"),
+            [noReference] = RatingsRecord(MediaType.Movie, "tt1000009") with
+            {
+                ProviderReferences = []
+            },
+            [badReference] = RatingsRecord(MediaType.Movie, "tt1000010") with
+            {
+                ProviderReferences = [new("tmdb", "movie", "0")]
+            },
+            [badEpisode] = RatingsRecord(MediaType.TvEpisode, "tt1000011") with
+            {
+                EpisodeNumber = 0
+            }
+        };
+        var latestPlayed = DateTimeOffset.Parse("2026-08-17T01:02:03Z");
+        var records = snapshot.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value with
+            {
+                Title = $"최신 {Path.GetFileNameWithoutExtension(pair.Key)}",
+                Genres = ["최신 장르"],
+                Poster = "posters/latest.png",
+                FileSizeBytes = 200,
+                LastWriteTimeUtc = DateTimeOffset.Parse("2026-08-17T00:00:00Z"),
+                DurationTicks = 300,
+                LastPlayedUtc = latestPlayed,
+                MetadataStatus = MetadataStatus.Matched,
+                RatingsFetched = false,
+                ProviderReferences = pair.Value.MediaType == MediaType.TvEpisode
+                    ? [new("tmdb", "tv-series", "20")]
+                    : [new("tmdb", "movie", "10")]
+            },
+            StringComparer.OrdinalIgnoreCase);
+        records[newlyMatched] = RatingsRecord(MediaType.Movie, "tt1000012") with
+        {
+            Title = "이번 스캔 새 영상",
+            FileSizeBytes = 999
+        };
+        using var ratingsHttp = new HttpClient(new ResponseHandler(request =>
+        {
+            var id = request.RequestUri!.Query.Contains("tt1000002", StringComparison.Ordinal)
+                ? "tt1000002"
+                : "tt1000001";
+            return Json($$"""
+                {"Response":"True","imdbID":"{{id}}","imdbRating":"8.1",
+                 "Ratings":[{"Source":"Rotten Tomatoes","Value":"81%"}]}
+                """);
+        }));
+        var committed = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase);
+
+        await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [FakeProvider.Empty("tmdb")],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.Where(path => path != missing).ToArray(),
+                (path, record, _, _) =>
+                {
+                    committed[path] = record;
+                    return Task.CompletedTask;
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: snapshot);
+
+        CollectionAssert.AreEquivalent(
+            new[] { movie, episode },
+            committed.Keys.ToArray());
+        foreach (var path in committed.Keys)
+        {
+            Assert.AreEqual(
+                records[path] with
+                {
+                    ImdbRating = 8.1,
+                    RottenTomatoesRating = 81,
+                    RatingsFetched = true
+                },
+                committed[path]);
+        }
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_BackfillReusesStoredIdAndClassifiesExternalIdOutcomes()
+    {
+        var stored = Path.GetFullPath("Stored.Movie.mkv");
+        var resolved = Path.GetFullPath("Resolved.Movie.mkv");
+        var absent = Path.GetFullPath("Absent.Movie.mkv");
+        var transient = Path.GetFullPath("Transient.Movie.mkv");
+        var authentication = Path.GetFullPath("Authentication.Movie.mkv");
+        var records = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [stored] = RatingsRecord(MediaType.Movie, "tt2000001") with { Title = "Stored Movie" },
+            [resolved] = RatingsRecord(MediaType.Movie) with { Title = "Resolved Movie" },
+            [absent] = RatingsRecord(MediaType.Movie) with { Title = "Absent Movie" },
+            [transient] = RatingsRecord(MediaType.Movie) with { Title = "Transient Movie" },
+            [authentication] = RatingsRecord(MediaType.Movie) with { Title = "Authentication Movie" }
+        };
+        var provider = new FakeProvider(
+            "tmdb",
+            (_, _) => throw new AssertFailedException("일반 검색을 호출하면 안 됩니다."),
+            (_, _) => throw new AssertFailedException("상세 조회를 호출하면 안 됩니다."),
+            imdbId: (record, _) => record.Title switch
+            {
+                "Resolved Movie" => Task.FromResult<string?>("tt2000002"),
+                "Absent Movie" => Task.FromResult<string?>(null),
+                "Transient Movie" => Task.FromException<string?>(
+                    new MetadataProviderException(
+                        MetadataProviderFailureKind.Transient,
+                        "network")),
+                _ => Task.FromException<string?>(
+                    new MetadataProviderException(
+                        MetadataProviderFailureKind.Authentication,
+                        "unauthorized"))
+            });
+        var omdbCalls = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(request =>
+        {
+            Interlocked.Increment(ref omdbCalls);
+            var id = request.RequestUri!.Query.Contains("tt2000002", StringComparison.Ordinal)
+                ? "tt2000002"
+                : "tt2000001";
+            return Json($$"""{"Response":"True","imdbID":"{{id}}","imdbRating":"7.2","Ratings":[]}""");
+        }));
+        var committed = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase);
+
+        var summary = await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                (path, record, _, _) =>
+                {
+                    committed[path] = record;
+                    return Task.CompletedTask;
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: records);
+
+        Assert.AreEqual(4, provider.ImdbIdCalls);
+        Assert.AreEqual(2, omdbCalls);
+        Assert.IsTrue(committed[stored].RatingsFetched);
+        Assert.AreEqual("tt2000001", committed[stored].ImdbId);
+        Assert.IsTrue(committed[resolved].RatingsFetched);
+        Assert.AreEqual("tt2000002", committed[resolved].ImdbId);
+        Assert.IsTrue(committed[absent].RatingsFetched);
+        Assert.IsNull(committed[absent].ImdbId);
+        Assert.IsFalse(committed[transient].RatingsFetched);
+        Assert.IsFalse(committed[authentication].RatingsFetched);
+        Assert.IsTrue(summary.AuthenticationFailed);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_BackfillLimitsRatingsAndCommitsAndReportsAfterAttempts()
+    {
+        var records = Enumerable.Range(1, 4).ToDictionary(
+            index => Path.GetFullPath($"Backfill{index}.Movie.mkv"),
+            index => RatingsRecord(MediaType.Movie, $"tt300000{index}"),
+            StringComparer.OrdinalIgnoreCase);
+        var requestSync = new object();
+        var activeRequests = 0;
+        var peakRequests = 0;
+        var started = 0;
+        var threeStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ratingsHttp = new HttpClient(new AsyncResponseHandler(
+            async (request, token) =>
+            {
+                lock (requestSync)
+                {
+                    activeRequests++;
+                    peakRequests = Math.Max(peakRequests, activeRequests);
+                    if (++started == 3) threeStarted.TrySetResult();
+                }
+                try
+                {
+                    await release.Task.WaitAsync(token);
+                    var id = request.RequestUri!.Query.Split("i=")[1].Split('&')[0];
+                    return Json($$"""{"Response":"True","imdbID":"{{id}}","imdbRating":"8.0","Ratings":[]}""");
+                }
+                finally
+                {
+                    lock (requestSync) activeRequests--;
+                }
+            }));
+        var commitSync = new object();
+        var activeCommits = 0;
+        var peakCommits = 0;
+        var finishedAttempts = 0;
+        var progress = new List<RatingsProgress>();
+        var progressAfterAttempts = new List<int>();
+        var run = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [FakeProvider.Empty("tmdb")],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                async (_, _, _, token) =>
+                {
+                    lock (commitSync)
+                    {
+                        activeCommits++;
+                        peakCommits = Math.Max(peakCommits, activeCommits);
+                    }
+                    try
+                    {
+                        await Task.Delay(10, token);
+                        if (Interlocked.Increment(ref finishedAttempts) == 2)
+                            throw new IOException("disk full");
+                    }
+                    finally
+                    {
+                        lock (commitSync) activeCommits--;
+                    }
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: records,
+                ratingsProgress: value =>
+                {
+                    lock (progress)
+                    {
+                        progress.Add(value);
+                        progressAfterAttempts.Add(Volatile.Read(ref finishedAttempts));
+                    }
+                });
+
+        await threeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(3, peakRequests);
+        lock (progress)
+        {
+            CollectionAssert.AreEqual(
+                new[] { new RatingsProgress(0, 4) },
+                progress.ToArray());
+        }
+        release.TrySetResult();
+        await run;
+
+        Assert.AreEqual(3, peakRequests);
+        Assert.AreEqual(1, peakCommits);
+        lock (progress)
+        {
+            CollectionAssert.AreEqual(
+                new[] { 0, 1, 2, 3, 4 },
+                progress.Select(value => value.Completed).ToArray());
+            CollectionAssert.AreEqual(
+                new[] { 0, 1, 2, 3, 4 },
+                progressAfterAttempts.ToArray());
+        }
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized, RatingsFailureKind.Authentication)]
+    [DataRow(HttpStatusCode.TooManyRequests, RatingsFailureKind.RateLimited)]
+    public async Task EnrichAsync_BackfillStopPreventsLaterRatingsRequests(
+        HttpStatusCode status,
+        RatingsFailureKind expectedFailure)
+    {
+        var records = Enumerable.Range(1, 5).ToDictionary(
+            index => Path.GetFullPath($"Stop{index}.Movie.mkv"),
+            index => RatingsRecord(MediaType.Movie, $"tt400000{index}"),
+            StringComparer.OrdinalIgnoreCase);
+        var requests = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+        {
+            Interlocked.Increment(ref requests);
+            return Json("{}", status);
+        }));
+        var committed = new List<VideoRecord>();
+
+        var summary = await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [FakeProvider.Empty("tmdb")],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                (_, record, _, _) =>
+                {
+                    lock (committed) committed.Add(record);
+                    return Task.CompletedTask;
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: records);
+
+        Assert.IsTrue(requests is >= 1 and <= 3);
+        Assert.AreEqual(expectedFailure, summary.RatingsFailure);
+        Assert.AreEqual(5, committed.Count);
+        Assert.IsTrue(committed.All(record => !record.RatingsFetched));
+    }
+
+    [DataTestMethod]
+    [DataRow(false, RatingsFailureKind.MissingKey)]
+    [DataRow(true, RatingsFailureKind.Configuration)]
+    public async Task EnrichAsync_BackfillKeyFailureReportsOnlyInitialProgress(
+        bool throwConfiguration,
+        RatingsFailureKind expectedFailure)
+    {
+        var path = Path.GetFullPath("Key.Movie.mkv");
+        var records = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [path] = RatingsRecord(MediaType.Movie, "tt5000001")
+        };
+        var requests = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+        {
+            Interlocked.Increment(ref requests);
+            return Json("{}");
+        }));
+        var progress = new List<RatingsProgress>();
+        var commits = 0;
+        string? ReadKey() => throwConfiguration
+            ? throw new IOException("cannot read")
+            : null;
+
+        var summary = await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [FakeProvider.Empty("tmdb")],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, ReadKey)).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                (_, _, _, _) =>
+                {
+                    Interlocked.Increment(ref commits);
+                    return Task.CompletedTask;
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: records,
+                ratingsProgress: progress.Add);
+
+        Assert.AreEqual(0, requests);
+        Assert.AreEqual(0, commits);
+        CollectionAssert.AreEqual(
+            new[] { new RatingsProgress(0, 1) },
+            progress);
+        Assert.AreEqual(expectedFailure, summary.RatingsFailure);
+    }
+
+    [DataTestMethod]
+    [DataRow(HttpStatusCode.Unauthorized, RatingsFailureKind.Authentication)]
+    [DataRow(HttpStatusCode.TooManyRequests, RatingsFailureKind.RateLimited)]
+    public async Task EnrichAsync_RatingsStopFromMetadataSkipsBackfillRequests(
+        HttpStatusCode status,
+        RatingsFailureKind expectedFailure)
+    {
+        var pending = Path.GetFullPath("Pending.Metadata.mkv");
+        var backfill = Path.GetFullPath("Existing.Movie.mkv");
+        var records = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [pending] = new VideoRecord
+            {
+                Title = "Pending Metadata",
+                MetadataStatus = MetadataStatus.Pending
+            },
+            [backfill] = RatingsRecord(MediaType.Movie, "tt6000002")
+        };
+        var snapshot = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [backfill] = records[backfill]
+        };
+        var provider = FakeProvider.WithMovie(
+            [new("tmdb", "movie", "1", MediaType.Movie)],
+            MovieDetails("일반 메타데이터", "1", "tmdb") with
+            {
+                ImdbId = "tt6000001"
+            });
+        var requestedIds = new List<string>();
+        using var ratingsHttp = new HttpClient(new ResponseHandler(request =>
+        {
+            lock (requestedIds) requestedIds.Add(request.RequestUri!.Query);
+            return Json("{}", status);
+        }));
+        var progress = new List<RatingsProgress>();
+
+        var summary = await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                (_, _, _, _) => Task.CompletedTask,
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: snapshot,
+                ratingsProgress: progress.Add);
+
+        Assert.AreEqual(expectedFailure, summary.RatingsFailure);
+        Assert.AreEqual(1, requestedIds.Count);
+        Assert.IsFalse(requestedIds.Single().Contains("tt6000002", StringComparison.Ordinal));
+        CollectionAssert.AreEqual(
+            new[] { new RatingsProgress(0, 1) },
+            progress);
+    }
+
     private MetadataEnrichmentService CreateService(
         params IMetadataProvider[] providers) =>
         new(
@@ -1708,6 +2157,24 @@ public sealed class MetadataEnrichmentServiceTests
                 MetadataStatus = value.Status
             },
             StringComparer.OrdinalIgnoreCase);
+
+    private static VideoRecord RatingsRecord(
+        MediaType mediaType,
+        string? imdbId = null) => new()
+    {
+        Title = mediaType == MediaType.Movie ? "Movie" : "Series S01E02",
+        MediaType = mediaType,
+        SeasonNumber = mediaType == MediaType.TvEpisode ? 1 : null,
+        EpisodeNumber = mediaType == MediaType.TvEpisode ? 2 : null,
+        ImdbId = imdbId,
+        MetadataStatus = MetadataStatus.Matched,
+        ProviderReferences = mediaType == MediaType.TvEpisode
+            ? [new("tmdb", "tv-series", "20")]
+            : [new("tmdb", "movie", "10")],
+        FileSizeBytes = 100,
+        LastWriteTimeUtc = DateTimeOffset.UnixEpoch,
+        DurationTicks = 200
+    };
 
     private static MetadataDetails MovieDetails(
         string title,
@@ -1852,17 +2319,20 @@ public sealed class MetadataEnrichmentServiceTests
         Func<MetadataCandidate, CancellationToken,
             Task<IReadOnlyList<TvSeasonCandidate>>>? seasons = null,
         Func<MetadataCandidate, int, CancellationToken,
-            Task<IReadOnlyList<TvEpisodeCandidate>>>? episodes = null)
+            Task<IReadOnlyList<TvEpisodeCandidate>>>? episodes = null,
+        Func<VideoRecord, CancellationToken, Task<string?>>? imdbId = null)
         : IMetadataProvider
     {
         public string ProviderKey { get; } = providerKey;
         private int _searchCalls;
         private int _detailsCalls;
         private int _tvBrowseCalls;
+        private int _imdbIdCalls;
 
         public int SearchCalls => Volatile.Read(ref _searchCalls);
         public int DetailsCalls => Volatile.Read(ref _detailsCalls);
         public int TvBrowseCalls => Volatile.Read(ref _tvBrowseCalls);
+        public int ImdbIdCalls => Volatile.Read(ref _imdbIdCalls);
 
         public async Task<IReadOnlyList<MetadataCandidate>> SearchAsync(
             MetadataQuery query,
@@ -1899,6 +2369,16 @@ public sealed class MetadataEnrichmentServiceTests
             return episodes is null
                 ? []
                 : await episodes(series, seasonNumber, cancellationToken);
+        }
+
+        public async Task<string?> GetImdbIdAsync(
+            VideoRecord record,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _imdbIdCalls);
+            return imdbId is null
+                ? null
+                : await imdbId(record, cancellationToken);
         }
 
         internal static FakeProvider WithMovie(
