@@ -910,7 +910,7 @@ public sealed class TmdbMetadataProviderTests
     }
 
     [TestMethod]
-    public void TmdbAccessToken_ReadsOnlyNamedValueFromLocalAppDataEnv()
+    public void LocalEnvironment_ReadsOnlyExactNamedValueFromLocalAppDataEnv()
     {
         var root = Directory.CreateTempSubdirectory("dabom-token-");
         try
@@ -929,8 +929,9 @@ public sealed class TmdbMetadataProviderTests
                 DABOM_TMDB_ACCESS_TOKEN="right-token"
                 """);
 
-            var token = TmdbAccessToken.ReadFromLocalApplicationData(
-                root.FullName);
+            var token = LocalEnvironment.ReadFromLocalApplicationData(
+                root.FullName,
+                "DABOM_TMDB_ACCESS_TOKEN");
 
             Assert.AreEqual("right-token", token);
         }

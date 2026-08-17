@@ -38,6 +38,23 @@ public enum MetadataProviderFailureKind
     InvalidResponse
 }
 
+public enum RatingsFailureKind
+{
+    MissingKey,
+    Configuration,
+    Authentication,
+    RateLimited,
+    Transient,
+    InvalidResponse
+}
+
+public sealed record RatingsLookupResult(
+    string? ImdbId,
+    double? ImdbRating,
+    int? RottenTomatoesRating,
+    bool Fetched,
+    RatingsFailureKind? Failure = null);
+
 public sealed record MetadataProviderIssue(
     MetadataProviderFailureKind Kind,
     TimeSpan? RetryAfter = null);
