@@ -12,6 +12,8 @@
   <ItemGroup>
     <Resource Include="Assets\Dabom.ico" />
     <Resource Include="Assets\TmdbLogo.png" />
+    <Resource Include="..\..\assets\imdb.png" Link="Assets\imdb.png" />
+    <Resource Include="..\..\assets\rotten_tomato.png" Link="Assets\rotten_tomato.png" />
   </ItemGroup>
 
 </Project>

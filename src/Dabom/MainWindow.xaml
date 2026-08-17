@@ -1134,6 +1134,46 @@
                             </Grid>
                         </Border>
                         <Border BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="0,1,0,0" Padding="0,8"
+                                Visibility="{Binding HasRatings, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="58" />
+                                    <ColumnDefinition Width="10" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="평점" FontSize="10"
+                                           AutomationProperties.Name="{Binding RatingsAutomationName}"
+                                           Foreground="{StaticResource MutedBrush}" />
+                                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0"
+                                                Visibility="{Binding HasImdbRating, Converter={StaticResource BoolToVisibility}}">
+                                        <Border Width="28" Height="14" Margin="0,0,5,0"
+                                                IsHitTestVisible="False">
+                                            <Border.Background>
+                                                <ImageBrush ImageSource="Assets/imdb.png"
+                                                            Stretch="Uniform" />
+                                            </Border.Background>
+                                        </Border>
+                                        <TextBlock Text="{Binding ImdbRatingText}" FontSize="11"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal"
+                                                Visibility="{Binding HasRottenTomatoesRating, Converter={StaticResource BoolToVisibility}}">
+                                        <Border Width="16" Height="16" Margin="0,0,5,0"
+                                                IsHitTestVisible="False">
+                                            <Border.Background>
+                                                <ImageBrush ImageSource="Assets/rotten_tomato.png"
+                                                            Stretch="Uniform" />
+                                            </Border.Background>
+                                        </Border>
+                                        <TextBlock Text="{Binding RottenTomatoesRatingText}" FontSize="11"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border BorderBrush="{StaticResource LineBrush}"
                                 BorderThickness="0,1,0,0" Padding="0,13,0,0" Margin="0,4,0,0">
                             <StackPanel>
                                 <TextBlock Text="시놉시스" FontSize="10" FontWeight="SemiBold"

@@ -730,6 +730,113 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void VideoItem_FormatsAvailableRatingsInSourceOrder()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-rating-text-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord
+                {
+                    Title = "영화",
+                    ImdbRating = 8.7,
+                    RottenTomatoesRating = 83
+                },
+                new LibraryStore(root.FullName));
+
+            Assert.IsTrue(item.HasRatings);
+            Assert.AreEqual("8.7", item.ImdbRatingText);
+            Assert.AreEqual("83%", item.RottenTomatoesRatingText);
+            Assert.AreEqual(
+                "IMDb 평점 8.7, Rotten Tomatoes 평점 83%",
+                item.RatingsAutomationName);
+            Assert.AreEqual(
+                "영화, 영상, IMDb 평점 8.7, Rotten Tomatoes 평점 83%",
+                item.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void VideoItem_FormatsOnlyImdbRating()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-imdb-rating-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { Title = "영화", ImdbRating = 8.0 },
+                new LibraryStore(root.FullName));
+
+            Assert.IsTrue(item.HasImdbRating);
+            Assert.IsFalse(item.HasRottenTomatoesRating);
+            Assert.IsTrue(item.HasRatings);
+            Assert.AreEqual("8.0", item.ImdbRatingText);
+            Assert.AreEqual(string.Empty, item.RottenTomatoesRatingText);
+            Assert.AreEqual("IMDb 평점 8.0", item.RatingsAutomationName);
+            Assert.AreEqual("영화, 영상, IMDb 평점 8.0", item.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void VideoItem_FormatsOnlyRottenTomatoesRating()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-rotten-rating-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { Title = "영화", RottenTomatoesRating = 83 },
+                new LibraryStore(root.FullName));
+
+            Assert.IsFalse(item.HasImdbRating);
+            Assert.IsTrue(item.HasRottenTomatoesRating);
+            Assert.IsTrue(item.HasRatings);
+            Assert.AreEqual(string.Empty, item.ImdbRatingText);
+            Assert.AreEqual("83%", item.RottenTomatoesRatingText);
+            Assert.AreEqual("Rotten Tomatoes 평점 83%", item.RatingsAutomationName);
+            Assert.AreEqual("영화, 영상, Rotten Tomatoes 평점 83%", item.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void VideoItem_WithoutRatings_PreservesExistingAutomationName()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-no-rating-");
+        try
+        {
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { Title = "영화" },
+                new LibraryStore(root.FullName));
+
+            Assert.IsFalse(item.HasImdbRating);
+            Assert.IsFalse(item.HasRottenTomatoesRating);
+            Assert.IsFalse(item.HasRatings);
+            Assert.AreEqual(string.Empty, item.ImdbRatingText);
+            Assert.AreEqual(string.Empty, item.RottenTomatoesRatingText);
+            Assert.AreEqual(string.Empty, item.RatingsAutomationName);
+            Assert.AreEqual("영화, 영상", item.AutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void SeasonGroupKey_UsesEligibilityProviderPriorityAndNormalizedTitleFallback()
     {
         var providerA = new VideoRecord

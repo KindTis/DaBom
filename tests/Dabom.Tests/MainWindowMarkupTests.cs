@@ -673,6 +673,71 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void CardPopup_RatingsUseDecorativeImageBrushesAndExcludeSeasons()
+    {
+        var markup = ReadMainWindowMarkup();
+        var popupStart = markup.IndexOf(
+            "<Popup x:Name=\"CardPopup\"",
+            StringComparison.Ordinal);
+        var popupEnd = markup.IndexOf("</Popup>", popupStart, StringComparison.Ordinal);
+        var popup = markup[popupStart..popupEnd];
+        var videoTemplate = CardTemplate(
+            popup,
+            "<DataTemplate DataType=\"{x:Type main:VideoItemViewModel}\"",
+            "<DataTemplate DataType=\"{x:Type main:SeasonItemViewModel}\"");
+        var seasonTemplate = CardTemplate(
+            popup,
+            "<DataTemplate DataType=\"{x:Type main:SeasonItemViewModel}\"",
+            "</ContentControl.Resources>");
+        var videoRow = videoTemplate.IndexOf("Text=\"영상\"", StringComparison.Ordinal);
+        var ratingsRow = videoTemplate.IndexOf("Text=\"평점\"", StringComparison.Ordinal);
+        var synopsisRow = videoTemplate.IndexOf("Text=\"시놉시스\"", StringComparison.Ordinal);
+        var ratingsBorderStart = videoTemplate.LastIndexOf(
+            "<Border",
+            ratingsRow,
+            StringComparison.Ordinal);
+        var ratingsBorder = videoTemplate[ratingsBorderStart..ratingsRow];
+        var project = File.ReadAllText(Path.Combine(ProjectDirectory(), "Dabom.csproj"));
+
+        Assert.IsTrue(videoRow >= 0 && ratingsRow > videoRow && synopsisRow > ratingsRow);
+        StringAssert.Contains(
+            videoTemplate,
+            "Visibility=\"{Binding HasRatings, Converter={StaticResource BoolToVisibility}}\"");
+        StringAssert.Contains(
+            videoTemplate,
+            "Visibility=\"{Binding HasImdbRating, Converter={StaticResource BoolToVisibility}}\"");
+        StringAssert.Contains(
+            videoTemplate,
+            "Visibility=\"{Binding HasRottenTomatoesRating, Converter={StaticResource BoolToVisibility}}\"");
+        Assert.IsTrue(
+            videoTemplate.IndexOf("Assets/imdb.png", StringComparison.Ordinal)
+            < videoTemplate.IndexOf("Assets/rotten_tomato.png", StringComparison.Ordinal));
+        StringAssert.Contains(
+            videoTemplate,
+            "Text=\"평점\" FontSize=\"10\"\n                                           AutomationProperties.Name=\"{Binding RatingsAutomationName}\"");
+        Assert.IsFalse(ratingsBorder.Contains(
+            "AutomationProperties.Name",
+            StringComparison.Ordinal));
+        Assert.IsFalse(videoTemplate.Contains(
+            "<Image Source=\"Assets/imdb.png\"", StringComparison.Ordinal));
+        Assert.IsFalse(videoTemplate.Contains(
+            "<Image Source=\"Assets/rotten_tomato.png\"", StringComparison.Ordinal));
+        StringAssert.Contains(videoTemplate, "<ImageBrush ImageSource=\"Assets/imdb.png\"");
+        StringAssert.Contains(videoTemplate, "<ImageBrush ImageSource=\"Assets/rotten_tomato.png\"");
+        Assert.IsFalse(seasonTemplate.Contains("HasRatings", StringComparison.Ordinal));
+        Assert.IsFalse(seasonTemplate.Contains("HasImdbRating", StringComparison.Ordinal));
+        Assert.IsFalse(seasonTemplate.Contains("HasRottenTomatoesRating", StringComparison.Ordinal));
+        Assert.IsFalse(seasonTemplate.Contains("Assets/imdb.png", StringComparison.Ordinal));
+        Assert.IsFalse(seasonTemplate.Contains("Assets/rotten_tomato.png", StringComparison.Ordinal));
+        StringAssert.Contains(
+            project,
+            "<Resource Include=\"..\\..\\assets\\imdb.png\" Link=\"Assets\\imdb.png\" />");
+        StringAssert.Contains(
+            project,
+            "<Resource Include=\"..\\..\\assets\\rotten_tomato.png\" Link=\"Assets\\rotten_tomato.png\" />");
+    }
+
+    [TestMethod]
     public void CardPopup_UsesVideoAndSeasonTemplatesAndAllowsSeasonHover()
     {
         var markup = ReadMainWindowMarkup();

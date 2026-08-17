@@ -1,4 +1,5 @@
 using Dabom.Library;
+using System.Globalization;
 using System.Windows.Media.Imaging;
 
 namespace Dabom.Main;
@@ -33,9 +34,30 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
     }
     public bool IsFileMissing => FileStatus == VideoFileStatus.Missing;
     public double PosterOpacity => IsFileMissing ? 0.5 : 1.0;
-    public override string AutomationName => IsFileMissing
+    public bool HasImdbRating => _record.ImdbRating is not null;
+    public bool HasRottenTomatoesRating => _record.RottenTomatoesRating is not null;
+    public bool HasRatings => HasImdbRating || HasRottenTomatoesRating;
+    public string ImdbRatingText => _record.ImdbRating?.ToString(
+        "0.0",
+        CultureInfo.InvariantCulture) ?? string.Empty;
+    public string RottenTomatoesRatingText => _record.RottenTomatoesRating is int rating
+        ? $"{rating.ToString(CultureInfo.InvariantCulture)}%"
+        : string.Empty;
+    public string RatingsAutomationName => string.Join(
+        ", ",
+        new[]
+        {
+            HasImdbRating ? $"IMDb 평점 {ImdbRatingText}" : null,
+            HasRottenTomatoesRating
+                ? $"Rotten Tomatoes 평점 {RottenTomatoesRatingText}"
+                : null
+        }.OfType<string>());
+    private string BaseAutomationName => IsFileMissing
         ? $"{DisplayTitle}, 영상, 파일 없음"
         : $"{DisplayTitle}, 영상";
+    public override string AutomationName => HasRatings
+        ? $"{BaseAutomationName}, {RatingsAutomationName}"
+        : BaseAutomationName;
     public string FileName => System.IO.Path.GetFileName(Path);
     public VideoRecord Record => _record;
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);
