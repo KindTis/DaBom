@@ -6,7 +6,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace Dabom.Metadata;
 
@@ -16,9 +15,6 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         new("https://api.themoviedb.org/3/");
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
-    private static readonly Regex ImdbIdPattern = new(
-        "^tt[0-9]+$",
-        RegexOptions.CultureInvariant);
     private readonly HttpClient _client;
     private readonly Func<string?> _getAccessToken;
     private readonly SemaphoreSlim _imageConfigurationGate = new(1, 1);
@@ -855,8 +851,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     }
 
     private static string? ValidImdbId(string? value) =>
-        !string.IsNullOrWhiteSpace(value)
-        && ImdbIdPattern.IsMatch(value)
+        OmdbRatingsClient.IsValidImdbId(value)
             ? value
             : null;
 

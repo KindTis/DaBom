@@ -734,11 +734,12 @@ public sealed class MainViewModel : ViewModelBase
                     ? result.Warnings.Count == 0
                         ? "폴더 확인을 마쳤습니다."
                         : $"폴더 확인을 마쳤습니다. 경고 {result.Warnings.Count}건"
-                    : $"메타데이터 적용 완료 · 성공 {summary.Matched} · 결과 없음 {summary.NotFound} · 실패 {summary.Failed}"
-                        + (summary.AuthenticationFailed
-                            ? " · .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
-                            : string.Empty);
-                StatusMessage = finalMessage + (summary.RatingsFailure switch
+                    : $"메타데이터 적용 완료 · 성공 {summary.Matched} · 결과 없음 {summary.NotFound} · 실패 {summary.Failed}";
+                StatusMessage = finalMessage
+                    + (summary.AuthenticationFailed
+                        ? " · .env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요."
+                        : string.Empty)
+                    + (summary.RatingsFailure switch
                 {
                     RatingsFailureKind.Configuration
                         or RatingsFailureKind.Authentication =>

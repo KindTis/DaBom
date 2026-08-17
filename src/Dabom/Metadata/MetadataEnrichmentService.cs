@@ -148,6 +148,7 @@ public sealed class MetadataEnrichmentService
         MetadataCandidate candidate,
         CancellationToken cancellationToken)
     {
+        var ratingsState = new RatingsRunState(_ratingsClient);
         var provider = _providers.FirstOrDefault(provider =>
             string.Equals(
                 provider.ProviderKey,
@@ -179,7 +180,6 @@ public sealed class MetadataEnrichmentService
                     MetadataProviderFailureKind.InvalidResponse,
                     "선택한 메타데이터 상세 정보가 완전하지 않습니다.");
             }
-            var ratingsState = new RatingsRunState(_ratingsClient);
             return details with
             {
                 Ratings = await LookupRatingsAsync(
@@ -635,16 +635,19 @@ public sealed class MetadataEnrichmentService
 
     private static bool HasValidTmdbReference(
         VideoRecord record,
-        string resourceType) =>
-        record.ProviderReferences.Any(reference =>
+        string resourceType)
+    {
+        var matches = record.ProviderReferences.Where(reference =>
             reference.ProviderKey == "tmdb"
-            && reference.ResourceType == resourceType
+            && reference.ResourceType == resourceType).Take(2).ToArray();
+        return matches.Length == 1
             && int.TryParse(
-                reference.ResourceId,
+                matches[0].ResourceId,
                 NumberStyles.None,
                 CultureInfo.InvariantCulture,
                 out var id)
-            && id > 0);
+            && id > 0;
+    }
 
     private async Task<RatingsLookupResult?> LookupRatingsAsync(
         string? imdbId,

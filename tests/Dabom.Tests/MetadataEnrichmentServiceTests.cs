@@ -512,6 +512,32 @@ public sealed class MetadataEnrichmentServiceTests
         Assert.IsTrue(details.Ratings.Fetched);
     }
 
+    [TestMethod]
+    public async Task GetManualDetailsAsync_ReadsRatingsKeyOnceAtEntryWhenProviderIsMissing()
+    {
+        var keyReads = 0;
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+            throw new AssertFailedException("OMDb 요청을 시작하면 안 됩니다.")));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [FakeProvider.Empty("owner")],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () =>
+            {
+                Interlocked.Increment(ref keyReads);
+                return "key";
+            }));
+
+        var error = await Assert.ThrowsExceptionAsync<MetadataProviderException>(
+            () => service.GetManualDetailsAsync(
+                new("missing", "movie", "1", MediaType.Movie),
+                CancellationToken.None));
+
+        Assert.AreEqual(MetadataProviderFailureKind.InvalidResponse, error.Kind);
+        Assert.AreEqual(1, keyReads);
+    }
+
     [DataTestMethod]
     [DataRow(HttpStatusCode.Unauthorized, RatingsFailureKind.Authentication)]
     [DataRow(HttpStatusCode.TooManyRequests, RatingsFailureKind.RateLimited)]
@@ -1795,6 +1821,48 @@ public sealed class MetadataEnrichmentServiceTests
                 },
                 committed[path]);
         }
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_BackfillDuplicateTmdbReferencesSkipsExternalIdAndCommit()
+    {
+        var path = Path.GetFullPath("Duplicate.Movie.mkv");
+        var record = RatingsRecord(MediaType.Movie) with
+        {
+            ProviderReferences =
+            [
+                new("tmdb", "movie", "10"),
+                new("tmdb", "movie", "11")
+            ]
+        };
+        var records = new Dictionary<string, VideoRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            [path] = record
+        };
+        var provider = FakeProvider.Empty("tmdb");
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+            throw new AssertFailedException("OMDb 요청을 시작하면 안 됩니다.")));
+        var commits = 0;
+
+        await new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
+                records,
+                records.Keys.ToArray(),
+                (_, _, _, _) =>
+                {
+                    Interlocked.Increment(ref commits);
+                    return Task.CompletedTask;
+                },
+                null,
+                CancellationToken.None,
+                ratingsBackfillSnapshot: records);
+
+        Assert.AreEqual(0, provider.ImdbIdCalls);
+        Assert.AreEqual(0, commits);
     }
 
     [TestMethod]

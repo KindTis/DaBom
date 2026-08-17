@@ -4685,6 +4685,61 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public async Task ScanAsync_BackfillTmdbAuthenticationAddsStatusGuidanceWithoutToast()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-ratings-tmdb-auth-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            var data = CachedData(root.FullName, path);
+            data.VideosByPath[path] = data.VideosByPath[path] with
+            {
+                Title = "영화",
+                MediaType = MediaType.Movie,
+                MetadataStatus = MetadataStatus.Matched,
+                ImdbId = null,
+                ProviderReferences = [new("tmdb", "movie", "10")]
+            };
+            var store = new LibraryStore(root.FullName);
+            await store.SaveAsync(data);
+            var ratingsHandler = new ResponseHandler(_ =>
+                throw new AssertFailedException("OMDb 요청을 시작하면 안 됩니다."));
+            using var ratingsHttp = new HttpClient(ratingsHandler);
+            using var imageClient = new HttpClient();
+            var provider = new TestProvider(
+                (_, _) => throw new AssertFailedException("일반 검색을 호출하면 안 됩니다."),
+                (_, _) => throw new AssertFailedException("상세 조회를 호출하면 안 됩니다."),
+                "tmdb",
+                (_, _) => Task.FromException<string?>(new MetadataProviderException(
+                    MetadataProviderFailureKind.Authentication,
+                    "unauthorized")));
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(path),
+                CreateEnrichment(
+                    store,
+                    imageClient,
+                    provider,
+                    new OmdbRatingsClient(ratingsHttp, () => "key")),
+                data);
+            var toasts = new List<string>();
+            vm.ToastRequested += (_, message) => toasts.Add(message.Message);
+
+            await vm.ScanAsync();
+
+            StringAssert.Contains(
+                vm.StatusMessage,
+                ".env의 DABOM_TMDB_ACCESS_TOKEN을 확인한 뒤 다시 탐색하세요.");
+            Assert.AreEqual(0, ratingsHandler.Calls);
+            Assert.AreEqual(0, toasts.Count);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void ScanAsync_RatingsFailureDoesNotChangeMetadataSummaryToast()
     {
         RunOnDispatcher(async () =>
@@ -5050,10 +5105,12 @@ public sealed class MainViewModelTests
     private sealed class TestProvider(
         Func<MetadataQuery, CancellationToken,
             Task<IReadOnlyList<MetadataCandidate>>> search,
-        Func<MetadataCandidate, CancellationToken, Task<MetadataDetails>> details)
+        Func<MetadataCandidate, CancellationToken, Task<MetadataDetails>> details,
+        string providerKey = "test",
+        Func<VideoRecord, CancellationToken, Task<string?>>? imdbId = null)
         : IMetadataProvider
     {
-        public string ProviderKey => "test";
+        public string ProviderKey => providerKey;
         public MetadataQuery? LastQuery { get; private set; }
         public MetadataCandidate? LastCandidate { get; private set; }
 
@@ -5072,6 +5129,12 @@ public sealed class MainViewModelTests
             LastCandidate = candidate;
             return details(candidate, cancellationToken);
         }
+
+        public Task<string?> GetImdbIdAsync(
+            VideoRecord record,
+            CancellationToken cancellationToken) => imdbId is null
+                ? Task.FromResult<string?>(null)
+                : imdbId(record, cancellationToken);
 
         internal static TestProvider ForMovie(MetadataDetails details) =>
             new(

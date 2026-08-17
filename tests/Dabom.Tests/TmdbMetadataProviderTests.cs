@@ -534,6 +534,7 @@ public sealed class TmdbMetadataProviderTests
     [DataRow("")]
     [DataRow("nm123")]
     [DataRow("tt12x")]
+    [DataRow("tt123\n")]
     public async Task GetDetailsAsync_InvalidExternalImdbId_ReturnsDetailsWithoutImdbId(
         string? imdbId)
     {
