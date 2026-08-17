@@ -502,7 +502,7 @@ public sealed class MetadataEnrichmentService
         }
         if (!OmdbRatingsClient.IsValidImdbId(imdbId))
         {
-            state.RecordFailure(RatingsFailureKind.InvalidResponse);
+            RecordFailure(state, RatingsFailureKind.InvalidResponse);
             return new(
                 imdbId,
                 null,
@@ -511,11 +511,11 @@ public sealed class MetadataEnrichmentService
                 RatingsFailureKind.InvalidResponse);
         }
 
-        var start = state.StartRequest(imdbId, linkedToken);
+        var start = StartRequest(state, imdbId, linkedToken);
         if (start.Request is null)
         {
             var failure = start.Failure!.Value;
-            state.RecordFailure(failure);
+            RecordFailure(state, failure);
             return new(imdbId, null, null, false, failure);
         }
 
@@ -540,10 +540,59 @@ public sealed class MetadataEnrichmentService
             result = result with { ImdbId = imdbId };
             if (result.Failure is { } failure)
             {
-                state.RecordFailure(failure);
+                RecordFailure(state, failure);
             }
         }
         return result;
+    }
+
+    private static (
+        Task<RatingsLookupResult>? Request,
+        RatingsFailureKind? Failure) StartRequest(
+            RatingsRunState state,
+            string imdbId,
+            CancellationToken cancellationToken)
+    {
+        lock (state.RequestStartGate)
+        {
+            var unavailable = state.UnavailableFailure;
+            if (unavailable is not null || state.ApiKey is null)
+            {
+                return (null, unavailable ?? state.KeyFailure);
+            }
+
+            return (
+                state.Client!.FetchAsync(
+                    state.ApiKey,
+                    imdbId,
+                    cancellationToken),
+                null);
+        }
+    }
+
+    private static void RecordFailure(
+        RatingsRunState state,
+        RatingsFailureKind failure)
+    {
+        if (failure == RatingsFailureKind.Configuration)
+        {
+            Volatile.Write(ref state.ConfigurationFailed, 1);
+        }
+        Interlocked.CompareExchange(
+            ref state.FailureValue,
+            (int)failure + 1,
+            0);
+        if (failure is RatingsFailureKind.Authentication
+            or RatingsFailureKind.RateLimited)
+        {
+            lock (state.RequestStartGate)
+            {
+                Interlocked.CompareExchange(
+                    ref state.StopFailure,
+                    (int)failure + 1,
+                    0);
+            }
+        }
     }
 
     private void TryDeletePoster(string? poster)
@@ -867,16 +916,17 @@ public sealed class MetadataEnrichmentService
         };
     }
 
-    internal sealed class RatingsRunState
+    private sealed class RatingsRunState
     {
-        private readonly object _requestStartGate = new();
-        private readonly OmdbRatingsClient? _client;
-        private int _failure;
-        private int _stopFailure;
+        internal readonly object RequestStartGate = new();
+        internal readonly OmdbRatingsClient? Client;
+        internal int ConfigurationFailed;
+        internal int FailureValue;
+        internal int StopFailure;
 
         internal RatingsRunState(OmdbRatingsClient? client)
         {
-            _client = client;
+            Client = client;
             if (client is null) return;
             (ApiKey, KeyFailure) = client.ReadApiKey();
         }
@@ -884,48 +934,12 @@ public sealed class MetadataEnrichmentService
         internal string? ApiKey { get; }
         internal RatingsFailureKind? KeyFailure { get; }
         internal RatingsFailureKind? UnavailableFailure =>
-            Read(Volatile.Read(ref _stopFailure));
+            Read(Volatile.Read(ref StopFailure));
         internal RatingsFailureKind? Failure =>
-            UnavailableFailure ?? Read(Volatile.Read(ref _failure));
-
-        internal (
-            Task<RatingsLookupResult>? Request,
-            RatingsFailureKind? Failure) StartRequest(
-                string imdbId,
-                CancellationToken cancellationToken)
-        {
-            lock (_requestStartGate)
-            {
-                var unavailable = Read(_stopFailure);
-                if (unavailable is not null || ApiKey is null)
-                {
-                    return (null, unavailable ?? KeyFailure);
-                }
-
-                return (
-                    _client!.FetchAsync(ApiKey, imdbId, cancellationToken),
-                    null);
-            }
-        }
-
-        internal void RecordFailure(RatingsFailureKind failure)
-        {
-            Interlocked.CompareExchange(
-                ref _failure,
-                (int)failure + 1,
-                0);
-            if (failure is RatingsFailureKind.Authentication
-                or RatingsFailureKind.RateLimited)
-            {
-                lock (_requestStartGate)
-                {
-                    Interlocked.CompareExchange(
-                        ref _stopFailure,
-                        (int)failure + 1,
-                        0);
-                }
-            }
-        }
+            UnavailableFailure
+            ?? (Volatile.Read(ref ConfigurationFailed) != 0
+                ? RatingsFailureKind.Configuration
+                : Read(Volatile.Read(ref FailureValue)));
 
         private static RatingsFailureKind? Read(int value) =>
             value == 0 ? null : (RatingsFailureKind)(value - 1);

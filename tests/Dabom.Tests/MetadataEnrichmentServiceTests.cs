@@ -574,43 +574,102 @@ public sealed class MetadataEnrichmentServiceTests
     }
 
     [TestMethod]
-    public async Task RatingsRunState_RecordsStopOnlyBeforeOrAfterAtomicRequestStart()
+    public async Task EnrichAsync_AuthenticationCannotOvertakeRequestStartBoundary()
     {
-        using var requestEntered = new ManualResetEventSlim();
-        using var releaseRequest = new ManualResetEventSlim();
+        var firstRequestStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var authenticationResponse = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondPreflight = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseSecondRequest = new ManualResetEventSlim();
+        var authenticationCommitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var requests = 0;
-        using var ratingsHttp = new HttpClient(new ResponseHandler((_, token) =>
+        var order = 0;
+        var secondStartedOrder = 0;
+        var authenticationCommittedOrder = 0;
+        using var ratingsHttp = new HttpClient(new AsyncResponseHandler(
+            (request, token) =>
         {
+            if (request.RequestUri!.Query.Contains(
+                    "i=tt111",
+                    StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref requests);
+                firstRequestStarted.SetResult();
+                return authenticationResponse.Task;
+            }
+
+            secondPreflight.SetResult();
+            releaseSecondRequest.Wait(token);
+            secondStartedOrder = Interlocked.Increment(ref order);
             Interlocked.Increment(ref requests);
-            requestEntered.Set();
-            releaseRequest.Wait(token);
-            return Json("{}", HttpStatusCode.Unauthorized);
+            return Task.FromResult(Json("""
+                {"Response":"True","imdbID":"tt222","imdbRating":"8.0",
+                 "Ratings":[]}
+                """));
         }));
-        var state = new MetadataEnrichmentService.RatingsRunState(
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [new("fake", "movie", query.Title, MediaType.Movie)]),
+            async (candidate, _) =>
+            {
+                var first = candidate.ResourceId.Contains(
+                    "First",
+                    StringComparison.Ordinal);
+                if (!first)
+                {
+                    await firstRequestStarted.Task;
+                }
+                return MovieDetails(candidate.ResourceId, candidate.ResourceId) with
+                {
+                    ImdbId = first ? "tt111" : "tt222"
+                };
+            });
+        var records = Records(
+            ("First.Movie.2024.mkv", MetadataStatus.Pending),
+            ("Second.Movie.2024.mkv", MetadataStatus.Pending));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
             new OmdbRatingsClient(ratingsHttp, () => "key"));
 
-        var firstStart = Task.Run(() => state.StartRequest(
-            "tt1234567",
-            CancellationToken.None));
-        Assert.IsTrue(requestEntered.Wait(TimeSpan.FromSeconds(1)));
-
-        var recordStop = Task.Run(() =>
-            state.RecordFailure(RatingsFailureKind.Authentication));
-        Assert.IsFalse(recordStop.Wait(TimeSpan.FromMilliseconds(100)));
-
-        releaseRequest.Set();
-        var first = await firstStart;
-        await recordStop;
-        Assert.IsNotNull(first.Request);
-        await first.Request;
-
-        var stopped = state.StartRequest(
-            "tt7654321",
+        var run = service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, record, _, _) =>
+            {
+                if (record.ImdbId == "tt111")
+                {
+                    authenticationCommittedOrder = Interlocked.Increment(ref order);
+                    authenticationCommitted.SetResult();
+                }
+                return Task.CompletedTask;
+            },
+            null,
             CancellationToken.None);
+        await secondPreflight.Task;
 
-        Assert.IsNull(stopped.Request);
-        Assert.AreEqual(RatingsFailureKind.Authentication, stopped.Failure);
-        Assert.AreEqual(1, requests);
+        authenticationResponse.SetResult(Json(
+            "{}",
+            HttpStatusCode.Unauthorized));
+        var authenticationOvertookRequestStart = ReferenceEquals(
+            authenticationCommitted.Task,
+            await Task.WhenAny(
+                authenticationCommitted.Task,
+                Task.Delay(TimeSpan.FromMilliseconds(250))));
+
+        releaseSecondRequest.Set();
+        var summary = await run;
+
+        Assert.IsFalse(authenticationOvertookRequestStart);
+        Assert.AreEqual(2, requests);
+        Assert.IsTrue(secondStartedOrder < authenticationCommittedOrder);
+        Assert.AreEqual(RatingsFailureKind.Authentication, summary.RatingsFailure);
     }
 
     [TestMethod]
@@ -678,6 +737,62 @@ public sealed class MetadataEnrichmentServiceTests
         Assert.IsFalse(result.Record.RatingsFetched);
         Assert.AreEqual(RatingsFailureKind.InvalidResponse, result.Summary.RatingsFailure);
         Assert.AreEqual(0, requests);
+    }
+
+    [TestMethod]
+    public async Task EnrichAsync_ValidConfigurationFailureOutranksEarlierInvalidId()
+    {
+        var invalidCommitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ratingsHttp = new HttpClient(new ResponseHandler(_ =>
+            throw new AssertFailedException("OMDb 요청을 만들면 안 됩니다.")));
+        var provider = new FakeProvider(
+            "fake",
+            (query, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>(
+                [new("fake", "movie", query.Title, MediaType.Movie)]),
+            async (candidate, _) =>
+            {
+                if (candidate.ResourceId.Contains("Valid", StringComparison.Ordinal))
+                {
+                    await invalidCommitted.Task;
+                }
+                return MovieDetails(candidate.ResourceId, candidate.ResourceId) with
+                {
+                    ImdbId = candidate.ResourceId.Contains(
+                        "Invalid",
+                        StringComparison.Ordinal)
+                        ? "bad"
+                        : "tt1234567"
+                };
+            });
+        var records = Records(
+            ("Invalid.Movie.2024.mkv", MetadataStatus.Pending),
+            ("Valid.Movie.2024.mkv", MetadataStatus.Pending));
+        var service = new MetadataEnrichmentService(
+            new MediaFilenameParser(),
+            [provider],
+            new LibraryStore(_root.FullName),
+            _imageClient,
+            new OmdbRatingsClient(
+                ratingsHttp,
+                () => throw new IOException("denied")));
+
+        var summary = await service.EnrichAsync(
+            records,
+            records.Keys.ToArray(),
+            (_, record, _, _) =>
+            {
+                if (record.ImdbId == "bad")
+                {
+                    invalidCommitted.SetResult();
+                }
+                return Task.CompletedTask;
+            },
+            null,
+            CancellationToken.None);
+
+        Assert.AreEqual(2, summary.Matched);
+        Assert.AreEqual(RatingsFailureKind.Configuration, summary.RatingsFailure);
     }
 
     [TestMethod]
