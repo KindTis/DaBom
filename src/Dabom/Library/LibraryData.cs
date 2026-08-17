@@ -68,6 +68,10 @@ public sealed record VideoRecord
     public string? EpisodeTitle { get; init; }
     public int? SeasonNumber { get; init; }
     public int? EpisodeNumber { get; init; }
+    public string? ImdbId { get; init; }
+    public double? ImdbRating { get; init; }
+    public int? RottenTomatoesRating { get; init; }
+    public bool RatingsFetched { get; init; }
     public string[] Genres { get; init; } = [];
     public MetadataStatus MetadataStatus { get; init; }
     public ProviderReference[] ProviderReferences { get; init; } = [];

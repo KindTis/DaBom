@@ -37,6 +37,10 @@ public sealed class LibraryStoreTests
                         EpisodeTitle = "검의 주인",
                         SeasonNumber = 1,
                         EpisodeNumber = 4,
+                        ImdbId = "tt1234567",
+                        ImdbRating = 8.7,
+                        RottenTomatoesRating = 83,
+                        RatingsFetched = true,
                         Genres = ["드라마", "판타지"],
                         MetadataStatus = MetadataStatus.Matched,
                         ProviderReferences =
@@ -71,6 +75,12 @@ public sealed class LibraryStoreTests
             Assert.AreEqual(expectedVideo.EpisodeTitle, actualVideo.EpisodeTitle);
             Assert.AreEqual(expectedVideo.SeasonNumber, actualVideo.SeasonNumber);
             Assert.AreEqual(expectedVideo.EpisodeNumber, actualVideo.EpisodeNumber);
+            Assert.AreEqual(expectedVideo.ImdbId, actualVideo.ImdbId);
+            Assert.AreEqual(expectedVideo.ImdbRating, actualVideo.ImdbRating);
+            Assert.AreEqual(
+                expectedVideo.RottenTomatoesRating,
+                actualVideo.RottenTomatoesRating);
+            Assert.AreEqual(expectedVideo.RatingsFetched, actualVideo.RatingsFetched);
             CollectionAssert.AreEqual(expectedVideo.Genres, actualVideo.Genres);
             Assert.AreEqual(expectedVideo.MetadataStatus, actualVideo.MetadataStatus);
             CollectionAssert.AreEqual(
@@ -83,6 +93,38 @@ public sealed class LibraryStoreTests
             Assert.AreEqual(expectedVideo.DurationTicks, actualVideo.DurationTicks);
             Assert.AreEqual(expectedVideo.LastPlayedUtc, actualVideo.LastPlayedUtc);
             Assert.IsTrue(actual.VideosByPath.Comparer.Equals(StringComparer.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task LoadAsync_LegacyJsonDefaultsRatingsForBackfill()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-ratings-legacy-");
+        try
+        {
+            var path = Path.Combine(root.FullName, "Movie.mkv");
+            await File.WriteAllTextAsync(
+                Path.Combine(root.FullName, "library.json"),
+                $$$"""
+                {"locations":[],"videosByPath":{
+                  "{{{path.Replace("\\", "\\\\")}}}":{
+                    "title":"영화","actors":[],"metadataStatus":"Matched"
+                  }
+                }}
+                """);
+
+            var record = (await new LibraryStore(root.FullName).LoadAsync(
+                CancellationToken.None)).VideosByPath[path];
+
+            Assert.IsNull(record.ImdbId);
+            Assert.IsNull(record.ImdbRating);
+            Assert.IsNull(record.RottenTomatoesRating);
+            Assert.IsFalse(record.RatingsFetched);
+            Assert.AreEqual(MetadataStatus.Matched, record.MetadataStatus);
         }
         finally
         {
