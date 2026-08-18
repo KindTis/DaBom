@@ -2045,13 +2045,15 @@ public sealed class MetadataEnrichmentServiceTests
     [DataTestMethod]
     [DataRow(HttpStatusCode.Unauthorized, RatingsFailureKind.Authentication)]
     [DataRow(HttpStatusCode.TooManyRequests, RatingsFailureKind.RateLimited)]
-    public async Task EnrichAsync_BackfillStopPreventsLaterRatingsRequests(
+    public async Task EnrichAsync_BackfillStopSkipsUnstartedItems(
         HttpStatusCode status,
         RatingsFailureKind expectedFailure)
     {
         var records = Enumerable.Range(1, 5).ToDictionary(
             index => Path.GetFullPath($"Stop{index}.Movie.mkv"),
-            index => RatingsRecord(MediaType.Movie, $"tt400000{index}"),
+            index => RatingsRecord(
+                MediaType.Movie,
+                index <= 3 ? $"tt400000{index}" : null),
             StringComparer.OrdinalIgnoreCase);
         var requests = 0;
         var requestedIds = new string[3];
@@ -2085,21 +2087,28 @@ public sealed class MetadataEnrichmentServiceTests
                      "Ratings":[{"Source":"Rotten Tomatoes","Value":"86%"}]}
                     """);
             }));
+        var provider = new FakeProvider(
+            "tmdb",
+            (_, _) => Task.FromResult<IReadOnlyList<MetadataCandidate>>([]),
+            (_, _) => throw new AssertFailedException(
+                "상세 조회를 호출하면 안 됩니다."),
+            imdbId: (_, _) => Task.FromResult<string?>("tt4999999"));
         var committed = new Dictionary<string, VideoRecord>(StringComparer.Ordinal);
+        var progress = new List<RatingsProgress>();
         var failureCommitted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         var run = new MetadataEnrichmentService(
             new MediaFilenameParser(),
-            [FakeProvider.Empty("tmdb")],
+            [provider],
             new LibraryStore(_root.FullName),
             _imageClient,
             new OmdbRatingsClient(ratingsHttp, () => "key")).EnrichAsync(
                 records,
                 records.Keys.ToArray(),
-                (_, record, _, _) =>
+                (path, record, _, _) =>
                 {
-                    committed[record.ImdbId!] = record;
+                    committed[path] = record;
                     if (record.ImdbId == requestedIds[0])
                     {
                         failureCommitted.TrySetResult();
@@ -2108,7 +2117,8 @@ public sealed class MetadataEnrichmentServiceTests
                 },
                 null,
                 CancellationToken.None,
-                ratingsBackfillSnapshot: records);
+                ratingsBackfillSnapshot: records,
+                ratingsProgress: progress.Add);
 
         await threeStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.AreEqual(3, requests);
@@ -2119,15 +2129,21 @@ public sealed class MetadataEnrichmentServiceTests
 
         Assert.AreEqual(3, requests);
         Assert.AreEqual(expectedFailure, summary.RatingsFailure);
-        Assert.AreEqual(5, committed.Count);
-        Assert.IsFalse(committed[requestedIds[0]].RatingsFetched);
+        Assert.AreEqual(0, provider.ImdbIdCalls);
+        Assert.AreEqual(3, committed.Count);
+        Assert.IsFalse(committed.Values.Single(record =>
+            record.ImdbId == requestedIds[0]).RatingsFetched);
         foreach (var imdbId in requestedIds.Skip(1))
         {
-            Assert.IsTrue(committed[imdbId].RatingsFetched);
-            Assert.AreEqual(8.6, committed[imdbId].ImdbRating);
-            Assert.AreEqual(86, committed[imdbId].RottenTomatoesRating);
+            var record = committed.Values.Single(value => value.ImdbId == imdbId);
+            Assert.IsTrue(record.RatingsFetched);
+            Assert.AreEqual(8.6, record.ImdbRating);
+            Assert.AreEqual(86, record.RottenTomatoesRating);
         }
         Assert.AreEqual(2, committed.Values.Count(record => record.RatingsFetched));
+        CollectionAssert.AreEqual(
+            new[] { 0, 1, 2, 3 },
+            progress.Select(value => value.Completed).ToArray());
     }
 
     [DataTestMethod]

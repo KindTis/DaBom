@@ -68,11 +68,8 @@ internal sealed class OmdbRatingsClient
 
         using (response)
         {
-            if (response.StatusCode is HttpStatusCode.Unauthorized
-                or HttpStatusCode.Forbidden)
-            {
-                return Failed(RatingsFailureKind.Authentication);
-            }
+            var authenticationResponse = response.StatusCode is
+                HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 return Failed(RatingsFailureKind.RateLimited);
@@ -81,7 +78,7 @@ internal sealed class OmdbRatingsClient
             {
                 return Failed(RatingsFailureKind.Transient);
             }
-            if (!response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode && !authenticationResponse)
             {
                 return Failed(RatingsFailureKind.InvalidResponse);
             }
@@ -108,7 +105,16 @@ internal sealed class OmdbRatingsClient
             catch (Exception error) when (
                 error is JsonException or NotSupportedException)
             {
-                return Failed(RatingsFailureKind.InvalidResponse);
+                return Failed(authenticationResponse
+                    ? RatingsFailureKind.Authentication
+                    : RatingsFailureKind.InvalidResponse);
+            }
+
+            if (authenticationResponse)
+            {
+                return Failed(body?.Error == "Request limit reached!"
+                    ? RatingsFailureKind.RateLimited
+                    : RatingsFailureKind.Authentication);
             }
 
             if (body is null)

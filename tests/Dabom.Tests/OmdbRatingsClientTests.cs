@@ -96,6 +96,7 @@ public sealed class OmdbRatingsClientTests
             (Json("{}", HttpStatusCode.Forbidden), false, RatingsFailureKind.Authentication),
             (Json("""{"Response":"False","Error":"Invalid API key!"}"""), false, RatingsFailureKind.Authentication),
             (Json("{}", HttpStatusCode.TooManyRequests), false, RatingsFailureKind.RateLimited),
+            (Json("""{"Response":"False","Error":"Request limit reached!"}""", HttpStatusCode.Unauthorized), false, RatingsFailureKind.RateLimited),
             (Json("""{"Response":"False","Error":"Request limit reached!"}"""), false, RatingsFailureKind.RateLimited),
             (Json("{}", HttpStatusCode.BadGateway), false, RatingsFailureKind.Transient),
             (Json("{broken"), false, RatingsFailureKind.InvalidResponse),

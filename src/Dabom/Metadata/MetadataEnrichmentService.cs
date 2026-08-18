@@ -515,6 +515,7 @@ public sealed class MetadataEnrichmentService
                     },
                     async (path, token) =>
                     {
+                        if (ratingsState.UnavailableFailure is not null) return;
                         var current = records[path];
                         var imdbId = OmdbRatingsClient.IsValidImdbId(current.ImdbId)
                             ? current.ImdbId
