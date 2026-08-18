@@ -49,6 +49,7 @@ internal sealed record SeasonGroupKey(
 public sealed class SeasonItemViewModel : LibraryItemViewModel
 {
     private readonly IReadOnlyList<VideoItemViewModel> _wholeGroup;
+    private readonly string _releaseYear;
 
     internal SeasonItemViewModel(
         SeasonGroupKey key,
@@ -58,6 +59,9 @@ public sealed class SeasonItemViewModel : LibraryItemViewModel
         Key = key;
         Episodes = episodes;
         _wholeGroup = wholeGroup;
+        _releaseYear = wholeGroup
+            .FirstOrDefault(video => video.Record.EpisodeNumber == 1)?
+            .Record.ReleaseDate?.Year.ToString() ?? "—";
         DisplayTitle = episodes[0].Record.SeriesTitle!.Trim();
         Poster = wholeGroup.FirstOrDefault(video => video.HasPoster)?.Poster;
     }
@@ -67,9 +71,9 @@ public sealed class SeasonItemViewModel : LibraryItemViewModel
     public string DisplayTitle { get; }
     public int SeasonNumber => Key.SeasonNumber;
     public int EpisodeCount => Episodes.Count;
-    public string Summary => $"시즌 {SeasonNumber} · {EpisodeCount}편";
+    public string Summary => $"{_releaseYear} · 시즌 {SeasonNumber} · {EpisodeCount}편";
     public int TotalEpisodeCount => _wholeGroup.Count;
-    public string TotalSummary => $"시즌 {SeasonNumber} · 총 {TotalEpisodeCount}편";
+    public string TotalSummary => $"{_releaseYear} · 시즌 {SeasonNumber} · 총 {TotalEpisodeCount}편";
     public VideoItemViewModel IntroEpisode => SelectIntroEpisode(_wholeGroup);
     public string IntroLabel => _wholeGroup.Any(video => video.Record.LastPlayedUtc is null)
         ? "다음 미시청 에피소드"
@@ -92,8 +96,8 @@ public sealed class SeasonItemViewModel : LibraryItemViewModel
     public bool ContainsMissingFiles => _wholeGroup.Any(video => video.IsFileMissing);
     public double PosterOpacity => ContainsMissingFiles ? 0.5 : 1.0;
     public override string AutomationName => ContainsMissingFiles
-        ? $"{DisplayTitle}, 시즌 {SeasonNumber}, {EpisodeCount}편, 파일 없음 포함, 시즌 열기"
-        : $"{DisplayTitle}, 시즌 {SeasonNumber}, {EpisodeCount}편, 시즌 열기";
+        ? $"{DisplayTitle}, {_releaseYear}, 시즌 {SeasonNumber}, {EpisodeCount}편, 파일 없음 포함, 시즌 열기"
+        : $"{DisplayTitle}, {_releaseYear}, 시즌 {SeasonNumber}, {EpisodeCount}편, 시즌 열기";
 
     private static VideoItemViewModel SelectIntroEpisode(
         IReadOnlyList<VideoItemViewModel> wholeGroup)

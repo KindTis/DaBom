@@ -897,7 +897,9 @@ public sealed class MainViewModelTests
                 {
                     MediaType = MediaType.TvEpisode,
                     SeriesTitle = "첫 표시명",
-                    SeasonNumber = 4
+                    SeasonNumber = 4,
+                    EpisodeNumber = 2,
+                    ReleaseDate = new DateOnly(2025, 1, 8)
                 },
                 store);
             var hiddenPoster = new VideoItemViewModel(
@@ -905,12 +907,19 @@ public sealed class MainViewModelTests
                 first.Record with
                 {
                     SeriesTitle = "숨은 표시명",
+                    EpisodeNumber = 1,
+                    ReleaseDate = new DateOnly(2024, 12, 20),
                     Poster = "posters/season.png"
                 },
                 store);
             var second = new VideoItemViewModel(
                 @"D:\Series\Third.mkv",
-                first.Record with { SeriesTitle = "다른 표시명" },
+                first.Record with
+                {
+                    SeriesTitle = "다른 표시명",
+                    EpisodeNumber = 3,
+                    ReleaseDate = new DateOnly(2025, 1, 15)
+                },
                 store);
             await hiddenPoster.LoadPosterAsync();
             var key = SeasonGroupKey.From(first.Record)!;
@@ -923,14 +932,15 @@ public sealed class MainViewModelTests
             Assert.AreEqual("첫 표시명", season.DisplayTitle);
             Assert.AreEqual(4, season.SeasonNumber);
             Assert.AreEqual(2, season.EpisodeCount);
-            Assert.AreEqual("시즌 4 · 2편", season.Summary);
+            Assert.AreEqual("2024 · 시즌 4 · 2편", season.Summary);
+            Assert.AreEqual("2024 · 시즌 4 · 총 3편", season.TotalSummary);
             CollectionAssert.AreEqual(
                 new[] { first, second },
                 season.Episodes.ToArray());
             Assert.AreSame(hiddenPoster.Poster, season.Poster);
             Assert.IsTrue(season.HasPoster);
             Assert.AreEqual(
-                "첫 표시명, 시즌 4, 2편, 시즌 열기",
+                "첫 표시명, 2024, 시즌 4, 2편, 시즌 열기",
                 season.AutomationName);
         }
         finally
@@ -968,7 +978,7 @@ public sealed class MainViewModelTests
                 [unknown, first, second, third, fourth]);
 
             Assert.AreEqual(5, season.TotalEpisodeCount);
-            Assert.AreEqual("시즌 1 · 총 5편", season.TotalSummary);
+            Assert.AreEqual("— · 시즌 1 · 총 5편", season.TotalSummary);
             Assert.AreSame(third, season.IntroEpisode);
             Assert.AreEqual("다음 미시청 에피소드", season.IntroLabel);
             Assert.AreEqual("3화 · 세 번째 화", season.IntroHeading);
@@ -984,6 +994,38 @@ public sealed class MainViewModelTests
             Assert.AreSame(allPlayed[0], replay.IntroEpisode);
             Assert.AreEqual("처음부터 보기", replay.IntroLabel);
             Assert.AreEqual("1화 · 첫 화", replay.IntroHeading);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public void SeasonItem_WithoutEpisodeOne_UsesUnknownYear()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-season-year-");
+        try
+        {
+            var store = new LibraryStore(root.FullName);
+            var second = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Second.mkv"),
+                TvRecord("두 번째 화", "시리즈", 1, 2, "10") with
+                {
+                    ReleaseDate = new DateOnly(2024, 1, 8)
+                },
+                store);
+            var third = new VideoItemViewModel(
+                Path.Combine(root.FullName, "Third.mkv"),
+                second.Record with { EpisodeNumber = 3 },
+                store);
+            var season = new SeasonItemViewModel(
+                SeasonGroupKey.From(second.Record)!,
+                [second, third],
+                [second, third]);
+
+            Assert.AreEqual("— · 시즌 1 · 2편", season.Summary);
+            Assert.AreEqual("— · 시즌 1 · 총 2편", season.TotalSummary);
         }
         finally
         {
@@ -1018,7 +1060,7 @@ public sealed class MainViewModelTests
             Assert.IsTrue(season.ContainsMissingFiles);
             Assert.AreEqual(0.5, season.PosterOpacity);
             Assert.AreEqual(
-                "시리즈, 시즌 1, 2편, 파일 없음 포함, 시즌 열기",
+                "시리즈, —, 시즌 1, 2편, 파일 없음 포함, 시즌 열기",
                 season.AutomationName);
         }
         finally
