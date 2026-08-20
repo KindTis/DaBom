@@ -92,6 +92,7 @@ public sealed class OmdbRatingsClientTests
             (Json("""{"Response":"True","imdbID":"tt1234567","imdbRating":"N/A","Ratings":[{"Source":"Rotten Tomatoes","Value":"N/A"}]}"""), true, null),
             (Json("""{"Response":"False","Error":"Movie not found!"}"""), true, null),
             (Json("""{"Response":"False","Error":"Incorrect IMDb ID."}"""), true, null),
+            (Json("""{"Response":"False","Error":"Error getting data."}"""), true, null),
             (Json("{}", HttpStatusCode.Unauthorized), false, RatingsFailureKind.Authentication),
             (Json("{}", HttpStatusCode.Forbidden), false, RatingsFailureKind.Authentication),
             (Json("""{"Response":"False","Error":"Invalid API key!"}"""), false, RatingsFailureKind.Authentication),

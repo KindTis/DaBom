@@ -125,7 +125,7 @@ internal sealed class OmdbRatingsClient
             {
                 return body.Error switch
                 {
-                    "Movie not found!" or "Incorrect IMDb ID." =>
+                    "Movie not found!" or "Incorrect IMDb ID." or "Error getting data." =>
                         new(imdbId, null, null, true),
                     "Invalid API key!" => Failed(RatingsFailureKind.Authentication),
                     "Request limit reached!" => Failed(RatingsFailureKind.RateLimited),
