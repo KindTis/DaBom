@@ -72,6 +72,8 @@ public sealed record VideoRecord
     public double? ImdbRating { get; init; }
     public int? RottenTomatoesRating { get; init; }
     public bool RatingsFetched { get; init; }
+    public string[] MediaTags { get; init; } = [];
+    public bool MediaTagsFetched { get; init; }
     public string[] Genres { get; init; } = [];
     public MetadataStatus MetadataStatus { get; init; }
     public ProviderReference[] ProviderReferences { get; init; } = [];

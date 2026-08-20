@@ -59,6 +59,14 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
         ? $"{BaseAutomationName}, {RatingsAutomationName}"
         : BaseAutomationName;
     public string FileName => System.IO.Path.GetFileName(Path);
+    public string[] MediaTags => _record.MediaTags;
+    public bool HasMediaTags => MediaTags.Length > 0;
+    public string[] VideoTags => MediaTags.Where(IsVideoDetailTag).ToArray();
+    public string[] AudioTags => MediaTags.Where(tag => !IsVideoDetailTag(tag)).ToArray();
+    public bool HasVideoTags => MediaTags.Any(IsVideoDetailTag);
+    public bool HasAudioTags => MediaTags.Any(tag => !IsVideoDetailTag(tag));
+    public string VideoTagsAutomationName => string.Join(", ", VideoTags);
+    public string AudioTagsAutomationName => string.Join(", ", AudioTags);
     public VideoRecord Record => _record;
     public string DisplayTitle => LibraryRules.DisplayTitle(Path, _record);
     public string OriginalTitle => _record.OriginalTitle ?? string.Empty;
@@ -114,6 +122,10 @@ public sealed class VideoItemViewModel : LibraryItemViewModel
         _record = record;
         Raise(string.Empty);
     }
+
+    private static bool IsVideoDetailTag(string tag) => tag is
+        "8K" or "4K" or "FHD" or "HD" or
+        "Dolby Vision" or "HDR10+" or "HDR10" or "HLG" or "HDR";
 
     private async Task LoadPosterCoreAsync(string posterReference)
     {

@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MediaInfo.Wrapper.Core" Version="26.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Assets\Dabom.ico" />
     <Resource Include="Assets\TmdbLogo.png" />
     <Resource Include="..\..\assets\imdb.png" Link="Assets\imdb.png" />

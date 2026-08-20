@@ -83,6 +83,7 @@ public sealed class MainViewModel : ViewModelBase
     private readonly CancellationToken _lifetimeToken;
     private readonly Func<string, FileProbeResult> _probeFile;
     private readonly Action<string> _moveToRecycleBin;
+    private readonly Func<string, string[]?>? _readMediaTags;
     private readonly ListCollectionView _visibleVideos;
     private LibraryData _data;
     private LibraryFilterOption _selectedFilter = new(
@@ -95,12 +96,14 @@ public sealed class MainViewModel : ViewModelBase
         ILibraryScanner scanner,
         MetadataEnrichmentService metadataEnrichment,
         LibraryData data,
-        CancellationToken lifetimeToken = default)
+        CancellationToken lifetimeToken = default,
+        Func<string, string[]?>? readMediaTags = null)
         : this(store, scanner, data, LaunchWithWindows,
             () => DateTimeOffset.UtcNow,
             maximum => Random.Shared.Next(maximum),
             metadataEnrichment,
-            lifetimeToken: lifetimeToken)
+            lifetimeToken: lifetimeToken,
+            readMediaTags: readMediaTags)
     {
     }
 
@@ -114,7 +117,8 @@ public sealed class MainViewModel : ViewModelBase
         MetadataEnrichmentService? metadataEnrichment = null,
         Func<string, FileProbeResult>? probeFile = null,
         Action<string>? moveToRecycleBin = null,
-        CancellationToken lifetimeToken = default)
+        CancellationToken lifetimeToken = default,
+        Func<string, string[]?>? readMediaTags = null)
     {
         _store = store;
         _scanner = scanner;
@@ -126,6 +130,7 @@ public sealed class MainViewModel : ViewModelBase
         _lifetimeToken = lifetimeToken;
         _probeFile = probeFile ?? WindowsFileOperations.Probe;
         _moveToRecycleBin = moveToRecycleBin ?? WindowsFileOperations.MoveToRecycleBin;
+        _readMediaTags = readMediaTags;
         RescanCommand = new AsyncRelayCommand(ScanAsync, () => CanMutateLibrary);
         PlayCommand = new AsyncRelayCommand(
             () => SelectedVideo is null ? Task.CompletedTask : PlayAsync(SelectedVideo),
@@ -577,7 +582,6 @@ public sealed class MainViewModel : ViewModelBase
             var activeStoredPaths = _data.VideosByPath.Keys
                 .Where(path => _data.Locations.Any(location => IsWithinLocation(path, location)))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var ratingsBackfillSnapshot = _data.VideosByPath;
             var acceptScanProgress = true;
             ScanResult result;
             try
@@ -679,6 +683,40 @@ public sealed class MainViewModel : ViewModelBase
             {
                 RequestToast($"보관 위치에 연결할 수 없습니다: {location}");
             }
+
+            var mediaTagCommittedPaths = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
+            void ReportMediaTagsProgress(int completed, int total)
+            {
+                if (uiDispatcher is null)
+                {
+                    ShowMediaTagsProgress(completed, total);
+                    return;
+                }
+
+                uiDispatcher.BeginInvoke(
+                    DispatcherPriority.Normal,
+                    new Action(() => ShowMediaTagsProgress(completed, total)));
+            }
+
+            await Task.Run(() => BackfillMediaTagsAsync(
+                result.Videos.Keys.ToArray(),
+                mediaTagCommittedPaths,
+                ReportMediaTagsProgress,
+                _lifetimeToken),
+                _lifetimeToken);
+            if (uiDispatcher is null)
+            {
+                await ApplyEnrichedRecordsAsync(mediaTagCommittedPaths);
+            }
+            else
+            {
+                await uiDispatcher.InvokeAsync(
+                    () => ApplyEnrichedRecordsAsync(mediaTagCommittedPaths),
+                    DispatcherPriority.Background).Task.Unwrap();
+            }
+
+            var ratingsBackfillSnapshot = _data.VideosByPath;
             var committedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var summary = new MetadataRunSummary(0, 0, 0, false);
             if (_metadataEnrichment is not null)
@@ -1183,6 +1221,78 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    private async Task BackfillMediaTagsAsync(
+        IReadOnlyCollection<string> currentPaths,
+        ISet<string> committedPaths,
+        Action<int, int> progress,
+        CancellationToken cancellationToken)
+    {
+        if (_readMediaTags is null) return;
+        var targets = currentPaths
+            .Where(path => !_data.VideosByPath[path].MediaTagsFetched)
+            .ToArray();
+        if (targets.Length == 0) return;
+
+        progress(0, targets.Length);
+        var completed = 0;
+        using var commitGate = new SemaphoreSlim(1, 1);
+        await Parallel.ForEachAsync(
+            targets,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = 3,
+                CancellationToken = cancellationToken
+            },
+            async (path, token) =>
+            {
+                string[]? tags;
+                try
+                {
+                    tags = _readMediaTags(path);
+                }
+                catch
+                {
+                    tags = null;
+                }
+
+                await commitGate.WaitAsync(token);
+                try
+                {
+                    if (tags is not null)
+                    {
+                        var updated = _data.VideosByPath[path] with
+                        {
+                            MediaTags = tags,
+                            MediaTagsFetched = true
+                        };
+                        try
+                        {
+                            await CommitEnrichedRecordAsync(
+                                path,
+                                updated,
+                                null,
+                                committedPaths,
+                                token);
+                        }
+                        catch (OperationCanceledException)
+                            when (token.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    progress(++completed, targets.Length);
+                }
+                finally
+                {
+                    commitGate.Release();
+                }
+            });
+    }
+
     private async Task ApplyEnrichedRecordsAsync(
         IReadOnlySet<string> committedPaths)
     {
@@ -1224,6 +1334,9 @@ public sealed class MainViewModel : ViewModelBase
 
     private void ShowRatingsProgress(RatingsProgress progress) =>
         StatusMessage = $"평점 보충 {progress.Completed}/{progress.Total}";
+
+    private void ShowMediaTagsProgress(int completed, int total) =>
+        StatusMessage = $"미디어 정보 분석 {completed}/{total}";
 
     private void ApplyCurrentVideos(
         IEnumerable<string> currentPaths,

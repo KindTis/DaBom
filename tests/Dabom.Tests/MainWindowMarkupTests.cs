@@ -783,6 +783,43 @@ public sealed class MainWindowMarkupTests
     }
 
     [TestMethod]
+    public void CardPopup_SeparatesVideoAndAudioTagsBelowRatings()
+    {
+        var document = XDocument.Parse(ReadMainWindowMarkup());
+        var videoTags = document.Descendants()
+            .Single(element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Name"
+                && attribute.Value == "CardPopupVideoTags"));
+        var audioTags = document.Descendants()
+            .Single(element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "Name"
+                && attribute.Value == "CardPopupAudioTags"));
+        var videoType = document.Descendants()
+            .SingleOrDefault(element => (string?)element.Attribute("Text") == "영상 타입");
+        var audioType = document.Descendants()
+            .SingleOrDefault(element => (string?)element.Attribute("Text") == "음향 타입");
+        var ratings = document.Descendants()
+            .Single(element => (string?)element.Attribute("Text") == "평점");
+
+        Assert.IsNotNull(videoType);
+        Assert.IsNotNull(audioType);
+        Assert.IsTrue(XNode.DocumentOrderComparer.Compare(ratings, videoType) < 0);
+        Assert.IsTrue(XNode.DocumentOrderComparer.Compare(videoType, audioType) < 0);
+        Assert.AreSame(videoTags.Parent, videoType.Parent);
+        Assert.AreSame(audioTags.Parent, audioType.Parent);
+        Assert.AreEqual("{Binding VideoTags}", (string?)videoTags.Attribute("ItemsSource"));
+        Assert.AreEqual("{Binding AudioTags}", (string?)audioTags.Attribute("ItemsSource"));
+        Assert.AreEqual(
+            "{Binding HasVideoTags, Converter={StaticResource BoolToVisibility}}",
+            (string?)videoTags.Parent?.Attribute("Visibility"));
+        Assert.AreEqual(
+            "{Binding HasAudioTags, Converter={StaticResource BoolToVisibility}}",
+            (string?)audioTags.Parent?.Attribute("Visibility"));
+        Assert.IsTrue(videoTags.Descendants().Any(element => element.Name.LocalName == "WrapPanel"));
+        Assert.IsTrue(audioTags.Descendants().Any(element => element.Name.LocalName == "WrapPanel"));
+    }
+
+    [TestMethod]
     public void MainWindow_OffersAccessibleAboutButtonNextToTitle()
     {
         var markup = ReadMainWindowMarkup();

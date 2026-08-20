@@ -43,7 +43,8 @@ public partial class App : Application
             new LibraryScanner(),
             enrichment,
             data,
-            _lifetime.Token);
+            _lifetime.Token,
+            MediaInfoTagReader.TryRead);
         var window = new MainWindow { DataContext = viewModel };
         MainWindow = window;
         SetWindowTaskbarIdentity(new WindowInteropHelper(window).EnsureHandle());

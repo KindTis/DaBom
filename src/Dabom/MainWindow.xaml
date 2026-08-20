@@ -1174,6 +1174,68 @@
                             </Grid>
                         </Border>
                         <Border BorderBrush="{StaticResource LineBrush}"
+                                BorderThickness="0,1,0,0" Padding="0,8"
+                                Visibility="{Binding HasMediaTags, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel>
+                                <Grid Visibility="{Binding HasVideoTags, Converter={StaticResource BoolToVisibility}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="58" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="영상 타입" FontSize="10"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                    <ItemsControl x:Name="CardPopupVideoTags" Grid.Column="2"
+                                                  ItemsSource="{Binding VideoTags}"
+                                                  AutomationProperties.Name="{Binding VideoTagsAutomationName}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{StaticResource RaisedBrush}"
+                                                        BorderBrush="{StaticResource LineBrush}"
+                                                        BorderThickness="1" CornerRadius="10"
+                                                        Padding="7,2" Margin="0,0,5,5">
+                                                    <TextBlock Text="{Binding}" FontSize="10" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Grid>
+                                <Grid Visibility="{Binding HasAudioTags, Converter={StaticResource BoolToVisibility}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="58" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="음향 타입" FontSize="10"
+                                               Foreground="{StaticResource MutedBrush}" />
+                                    <ItemsControl x:Name="CardPopupAudioTags" Grid.Column="2"
+                                                  ItemsSource="{Binding AudioTags}"
+                                                  AutomationProperties.Name="{Binding AudioTagsAutomationName}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="{StaticResource RaisedBrush}"
+                                                        BorderBrush="{StaticResource LineBrush}"
+                                                        BorderThickness="1" CornerRadius="10"
+                                                        Padding="7,2" Margin="0,0,5,5">
+                                                    <TextBlock Text="{Binding}" FontSize="10" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <Border BorderBrush="{StaticResource LineBrush}"
                                 BorderThickness="0,1,0,0" Padding="0,13,0,0" Margin="0,4,0,0">
                             <StackPanel>
                                 <TextBlock Text="시놉시스" FontSize="10" FontWeight="SemiBold"

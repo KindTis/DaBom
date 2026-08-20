@@ -730,6 +730,45 @@ public sealed class MainViewModelTests
     }
 
     [TestMethod]
+    public void VideoItem_SeparatesVideoAndAudioTagsForTooltip()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-media-tags-");
+        try
+        {
+            var tags = new[]
+            {
+                "4K",
+                "HDR10",
+                "Dolby TrueHD · Dolby Atmos · 7.1",
+                "AAC · 2.0"
+            };
+            var item = new VideoItemViewModel(
+                @"D:\Movie.mkv",
+                new VideoRecord { MediaTags = tags },
+                new LibraryStore(root.FullName));
+
+            Assert.IsTrue(item.HasMediaTags);
+            CollectionAssert.AreEqual(tags, item.MediaTags);
+            CollectionAssert.AreEqual(
+                new[] { "4K", "HDR10" },
+                item.VideoTags);
+            CollectionAssert.AreEqual(
+                new[] { "Dolby TrueHD · Dolby Atmos · 7.1", "AAC · 2.0" },
+                item.AudioTags);
+            Assert.IsTrue(item.HasVideoTags);
+            Assert.IsTrue(item.HasAudioTags);
+            Assert.AreEqual("4K, HDR10", item.VideoTagsAutomationName);
+            Assert.AreEqual(
+                "Dolby TrueHD · Dolby Atmos · 7.1, AAC · 2.0",
+                item.AudioTagsAutomationName);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
     public void VideoItem_FormatsAvailableRatingsInSourceOrder()
     {
         var root = Directory.CreateTempSubdirectory("dabom-rating-text-");
@@ -1311,6 +1350,149 @@ public sealed class MainViewModelTests
         }
         finally
         {
+            root.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ScanAsync_MediaTagsBackfillRunsThreeAtATimePersistsBeforeCompletionAndUpdatesUiAfterward()
+    {
+        var root = Directory.CreateTempSubdirectory("dabom-media-tags-");
+        using var firstWaveStarted = new CountdownEvent(3);
+        using var releaseFirstWave = new ManualResetEventSlim();
+        using var fourthStarted = new ManualResetEventSlim();
+        using var releaseFourth = new ManualResetEventSlim();
+        Task? scan = null;
+        try
+        {
+            var paths = Enumerable.Range(1, 4)
+                .Select(number => Path.Combine(root.FullName, $"Movie{number}.mkv"))
+                .ToArray();
+            var data = CachedData(root.FullName, paths);
+            await new LibraryStore(root.FullName).SaveAsync(data);
+            var firstWaveCommitted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var commits = 0;
+            var store = new LibraryStore(
+                root.FullName,
+                (temporary, destination, _) =>
+                {
+                    File.Move(temporary, destination, true);
+                    if (Interlocked.Increment(ref commits) == 3)
+                    {
+                        firstWaveCommitted.TrySetResult();
+                    }
+                    return Task.CompletedTask;
+                });
+            var reads = 0;
+            var activeReaders = 0;
+            var maximumReaders = 0;
+            string[]? ReadMediaTags(string _)
+            {
+                var call = Interlocked.Increment(ref reads);
+                var active = Interlocked.Increment(ref activeReaders);
+                int observed;
+                while ((observed = Volatile.Read(ref maximumReaders)) < active
+                    && Interlocked.CompareExchange(
+                        ref maximumReaders,
+                        active,
+                        observed) != observed)
+                {
+                }
+
+                try
+                {
+                    if (call <= 3)
+                    {
+                        firstWaveStarted.Signal();
+                        if (!releaseFirstWave.Wait(TimeSpan.FromSeconds(5)))
+                            throw new TimeoutException();
+                    }
+                    else
+                    {
+                        fourthStarted.Set();
+                        if (!releaseFourth.Wait(TimeSpan.FromSeconds(5)))
+                            throw new TimeoutException();
+                    }
+                    return ["4K", "HDR10"];
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref activeReaders);
+                }
+            }
+
+            var vm = new MainViewModel(
+                store,
+                new StubScanner(paths),
+                data,
+                _ => true,
+                () => DateTimeOffset.UtcNow,
+                _ => 0,
+                readMediaTags: ReadMediaTags);
+            var messages = new List<string>();
+            vm.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(MainViewModel.StatusMessage))
+                {
+                    lock (messages) messages.Add(vm.StatusMessage);
+                }
+            };
+
+            scan = vm.ScanAsync();
+            Assert.IsTrue(await Task.Run(() =>
+                firstWaveStarted.Wait(TimeSpan.FromSeconds(2))));
+            Assert.AreEqual(3, Volatile.Read(ref reads));
+            Assert.AreEqual(3, Volatile.Read(ref maximumReaders));
+
+            releaseFirstWave.Set();
+            Assert.IsTrue(await Task.Run(() =>
+                fourthStarted.Wait(TimeSpan.FromSeconds(2))));
+            await firstWaveCommitted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var partiallySaved = await new LibraryStore(root.FullName)
+                .LoadAsync(CancellationToken.None);
+            Assert.IsTrue(partiallySaved.VideosByPath.Values.Any(record =>
+                record.MediaTagsFetched));
+            Assert.IsTrue(vm.Videos.All(video => !video.Record.MediaTagsFetched));
+
+            releaseFourth.Set();
+            await scan;
+            scan = null;
+
+            var fullySaved = await new LibraryStore(root.FullName)
+                .LoadAsync(CancellationToken.None);
+            Assert.IsTrue(
+                vm.Videos.All(video => video.Record.MediaTagsFetched),
+                $"UI={vm.Videos.Count(video => video.Record.MediaTagsFetched)}/4, "
+                + $"saved={fullySaved.VideosByPath.Values.Count(record => record.MediaTagsFetched)}/4, "
+                + $"reads={reads}");
+            Assert.IsTrue(vm.Videos.All(video =>
+                video.Record.MediaTags.SequenceEqual(["4K", "HDR10"])));
+            lock (messages)
+            {
+                CollectionAssert.AreEqual(
+                    new[]
+                    {
+                        "미디어 정보 분석 0/4",
+                        "미디어 정보 분석 1/4",
+                        "미디어 정보 분석 2/4",
+                        "미디어 정보 분석 3/4",
+                        "미디어 정보 분석 4/4"
+                    },
+                    messages.Where(message => message.StartsWith(
+                        "미디어 정보 분석",
+                        StringComparison.Ordinal)).ToArray());
+            }
+
+            await vm.ScanAsync();
+            Assert.AreEqual(4, reads);
+        }
+        finally
+        {
+            releaseFirstWave.Set();
+            releaseFourth.Set();
+            if (scan is not null) await scan;
             root.Delete(true);
         }
     }
@@ -4574,12 +4756,17 @@ public sealed class MainViewModelTests
             };
             var store = new LibraryStore(root.FullName);
             await store.SaveAsync(data);
-            var handler = new ResponseHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            var order = new List<string>();
+            var handler = new ResponseHandler(_ =>
             {
-                Content = new StringContent(
-                    """{"Response":"True","imdbID":"tt7000001","imdbRating":"8.4","Ratings":[]}""",
-                    Encoding.UTF8,
-                    "application/json")
+                lock (order) order.Add("ratings");
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"Response":"True","imdbID":"tt7000001","imdbRating":"8.4","Ratings":[]}""",
+                        Encoding.UTF8,
+                        "application/json")
+                };
             });
             using var ratingsHttp = new HttpClient(handler);
             using var imageClient = new HttpClient();
@@ -4592,7 +4779,12 @@ public sealed class MainViewModelTests
                     imageClient,
                     provider,
                     new OmdbRatingsClient(ratingsHttp, () => "key")),
-                data);
+                data,
+                readMediaTags: _ =>
+                {
+                    lock (order) order.Add("media");
+                    return ["4K", "HDR10"];
+                });
             var messages = new List<string>();
             vm.PropertyChanged += (_, args) =>
             {
@@ -4606,12 +4798,22 @@ public sealed class MainViewModelTests
             await vm.ScanAsync();
 
             Assert.AreEqual(1, handler.Calls);
+            CollectionAssert.AreEqual(new[] { "media", "ratings" }, order);
             Assert.IsTrue(vm.Videos.Single(video => video.Path == current)
                 .Record.RatingsFetched);
+            Assert.IsTrue(vm.Videos.Single(video => video.Path == current)
+                .Record.MediaTagsFetched);
             Assert.IsFalse(vm.Videos.Single(video => video.Path == missing)
                 .Record.RatingsFetched);
             lock (messages)
             {
+                var mediaProgress = messages.Where(message =>
+                    message.StartsWith(
+                        "미디어 정보 분석",
+                        StringComparison.Ordinal)).ToArray();
+                CollectionAssert.AreEqual(
+                    new[] { "미디어 정보 분석 0/1", "미디어 정보 분석 1/1" },
+                    mediaProgress);
                 var ratingsProgress = messages.Where(message =>
                     message.StartsWith("평점 보충", StringComparison.Ordinal)).ToArray();
                 CollectionAssert.AreEqual(

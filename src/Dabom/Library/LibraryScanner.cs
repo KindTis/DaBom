@@ -11,7 +11,9 @@ public sealed class LibraryScanner : ILibraryScanner
     private readonly Func<string, long?> _readDuration;
     private readonly Func<string, FileAttributes> _getAttributes;
 
-    public LibraryScanner() : this(WindowsDurationReader.TryReadTicks, File.GetAttributes) { }
+    public LibraryScanner() : this(
+        WindowsDurationReader.TryReadTicks,
+        File.GetAttributes) { }
 
     internal LibraryScanner(
         Func<string, long?> readDuration,
@@ -94,7 +96,8 @@ public sealed class LibraryScanner : ILibraryScanner
 
                             var info = new FileInfo(path);
                             var modified = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
-                            var duration = cache.TryGetValue(path, out var old)
+                            cache.TryGetValue(path, out var old);
+                            var duration = old is not null
                                 && old.FileSizeBytes == info.Length
                                 && old.LastWriteTimeUtc == modified
                                     ? old.DurationTicks
